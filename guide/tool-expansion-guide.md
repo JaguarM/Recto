@@ -97,9 +97,12 @@ hooks.js                  ← defines window.PDFHooks (loaded first)
   → [tool.scripts_after_app for each registered tool]
 ```
 
-`PDFHooks` exists before any plugin script, so a plugin can call `PDFHooks.on(...)` at module scope regardless of which bucket it loads in. Subscribing is order-independent: the core emits events at runtime (page render, document load, …), long after every script has loaded.
+`PDFHooks` exists before any plugin script, so a plugin can call `PDFHooks.on(...)` at module scope regardless of which bucket it loads in. Subscribing is order-independent for the *runtime* events (page render, document load, zoom, …) — the core emits those long after every script has loaded.
 
-Scripts in `scripts_before_viewer` run before `app.js`, so they cannot call `app.js` functions (like `openSubtoolbar`) at module scope — defer those to a `PDFHooks.on('ui:ready', …)` handler or another event callback. Scripts in `scripts_after_app` can reference `app.js` globals directly.
+**Exception — `ui:ready`:** it is emitted *during* `app.js` execution, i.e. after the `scripts_before_viewer` bucket but **before the `scripts_after_app` bucket has even parsed**, and the bus does not replay past events to late subscribers. A `ui:ready` handler registered from `scripts_after_app` never fires. The rule:
+
+- `scripts_before_viewer` — cannot touch `app.js` globals at module scope; do UI wiring inside a `PDFHooks.on('ui:ready', …)` handler.
+- `scripts_after_app` — wire the UI **at module scope** (the DOM and `app.js` globals already exist); do not use `ui:ready`. This is what `text_tool/toolbar.js` does.
 
 ### Frontend Lifecycle — the PDFHooks Bus
 
@@ -115,7 +118,7 @@ Events emitted by the core:
 
 | Event | When | Payload |
 |-------|------|---------|
-| `ui:ready` | core toolbar wired (end of `app.js` init) | — |
+| `ui:ready` | core toolbar wired (mid-`app.js`, BEFORE `scripts_after_app` parse — only `scripts_before_viewer` can catch it) | — |
 | `viewer:clear` | viewer torn down before a page change | — |
 | `page:rendered` | a page container was added to the DOM | `{ pageContainer, pageNum }` |
 | `pages:refresh` | re-sync per-page overlays | — |
@@ -212,14 +215,14 @@ Start with `class="options-bar hidden"`. The bar must be hidden by default; `ope
 </div>
 ```
 
-### Step 5 — JavaScript Toggle (via `ui:ready` + `registerSubtoolbar`)
+### Step 5 — JavaScript Toggle (module scope + `registerSubtoolbar`)
 
-Wire the toggle inside a `PDFHooks.on('ui:ready', …)` handler — that guarantees the core's `openSubtoolbar`/`registerSubtoolbar` exist no matter which script bucket you load in. Call `registerSubtoolbar(button)` once so the core can deactivate your button generically when another subtoolbar opens. **You never edit `app.js`.**
+Put your tool script in `scripts_after_app` and wire the toggle **at module scope** — the toolbar DOM and the core's `openSubtoolbar`/`registerSubtoolbar` already exist by then. Do **not** wrap the wiring in `PDFHooks.on('ui:ready', …)`: that event fires before `scripts_after_app` scripts parse and is never replayed, so the handler would silently never run (see the load-order note above; `text_tool/toolbar.js` wires exactly this way). Call `registerSubtoolbar(button)` once so the core can deactivate your button generically when another subtoolbar opens. **You never edit `app.js`.**
 
 ```js
-// static/my_tool/my-tool.js
+// static/my_tool/my-tool.js  (a scripts_after_app entry)
 
-PDFHooks.on('ui:ready', () => {
+(function wireMyTool() {
   const btn = document.getElementById('toggle-my-tool');
   const bar = document.getElementById('my-tool-bar');
   if (!btn || !bar) return;
@@ -234,8 +237,10 @@ PDFHooks.on('ui:ready', () => {
       window.openSubtoolbar?.(null, null); // back to the default text bar
     }
   });
-});
+})();
 ```
+
+(Only a `scripts_before_viewer` script should use the `ui:ready` handler pattern for UI wiring — it is the one bucket that runs early enough to catch the event.)
 
 `openSubtoolbar` hides every element with class `options-bar` and deactivates every registered toggle, then shows the one you pass. Because it operates by class + registry, **no core edit is required** — that is the whole point of the pattern.
 
@@ -419,7 +424,7 @@ The route is auto-discovered from `tool.url_module` — no need to edit `recto/u
 3. **Write `my_tool/apps.py`** — `ready()` does `import my_tool.tool`
 4. **Create templates** — `toolbar_button.html`, `options_bar.html`, and/or `sidebar.html`
 5. **Create static assets** — JS and CSS files referenced in your tool class
-6. **Wire runtime behaviour through `PDFHooks`** — subscribe to lifecycle events (`page:rendered`, `document:loaded`, …); for a subtoolbar, call `registerSubtoolbar(btn)` inside a `ui:ready` handler
+6. **Wire runtime behaviour through `PDFHooks`** — subscribe to lifecycle events (`page:rendered`, `document:loaded`, …); for a subtoolbar in `scripts_after_app`, call `registerSubtoolbar(btn)` and add your click handlers at module scope (NOT inside `ui:ready` — it has already fired)
 7. *(Right panel only)* add your panel to the `openRightPanel()` hide list in `app.js` (the right-panel pattern is not yet fully hook-driven)
 
 **Zero changes needed to**: `index.html`, `recto/urls.py`, `settings.py`, `app.js` (for subtoolbars), or any other plugin's code.

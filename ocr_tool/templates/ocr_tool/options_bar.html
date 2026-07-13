@@ -3,11 +3,17 @@
     <div id="ocr-tool-bar" class="options-bar hidden">
       <div class="options-divider"></div>
       <div class="options-group">
-        <div class="options-group-header">Read</div>
+        <div class="options-group-header">Auto OCR</div>
         <div class="options-group-controls">
-          <button id="ocr-run-page" class="ocr-run-btn" title="Read the current page with the blind reader">This page</button>
-          <button id="ocr-run-all" class="ocr-run-btn" title="Read every page of the document">All pages</button>
-          <button id="ocr-cancel" class="ocr-run-btn hidden" title="Stop after the current page">Cancel</button>
+          <button id="ocr-run-page" class="icon-button" title="Read this page — byte-exact blind reader">
+            <span class="material-symbols-outlined">play_arrow</span>
+          </button>
+          <button id="ocr-run-all" class="icon-button" title="Read all pages">
+            <span class="material-symbols-outlined">playlist_play</span>
+          </button>
+          <button id="ocr-cancel" class="icon-button hidden" title="Stop after the current page">
+            <span class="material-symbols-outlined">stop</span>
+          </button>
         </div>
       </div>
 
@@ -16,7 +22,7 @@
       <div class="options-group">
         <div class="options-group-header">Result</div>
         <div class="options-group-controls">
-          <span id="ocr-status" class="options-label">Byte-exact OCR of the page raster — text lands as editable boxes.</span>
+          <span id="ocr-status" class="options-label">idle</span>
         </div>
       </div>
     </div>

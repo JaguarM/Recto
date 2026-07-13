@@ -26,7 +26,7 @@ const OCR_UNREAD_COLOR = 'rgba(217, 48, 37, 0.85)';    // □ marker boxes
 
 function setOcrStatus(msg) {
   const el = document.getElementById('ocr-status');
-  if (el) el.textContent = msg;
+  if (el) { el.textContent = msg; el.title = msg; }  // title: full text survives the ellipsis
 }
 
 async function ocrLoadSets() {
@@ -233,10 +233,14 @@ async function ocrRun(allPages) {
     if (typeof calculateAllWidths === 'function') calculateAllWidths();
     if (lastPass) {
       const cert = lastPass.tol ? `clean@±${lastPass.tol}` : 'byte-clean';
+      // a union pool's set name is 'a+b+…' — too noisy for the status line;
+      // 'mixed fonts' already conveys what the (mixed-font) pass label would
+      const shownFonts = [...new Set([...fonts].map(f => f.includes('+') ? 'mixed fonts' : f))];
       setOcrStatus(`${totals.lines} lines, ${totals.clean} ${cert}` +
         (totals.unread ? `, ${totals.unread} unread (□)` : '') +
         (totals.boxes ? ` · ${totals.boxes} redaction boxes` : '') +
-        ` · ${[...fonts].join(' ') || '—'}${BlindOCR.passLabel(lastPass)}` +
+        ` · ${shownFonts.join(' ') || '—'}` +
+        (lastPass.quant ? ' · palette producer' : '') +
         (ocrToolState.cancel ? ' · cancelled' : ''));
     } else {
       setOcrStatus('OCR: no readable page rasters');
@@ -251,8 +255,13 @@ async function ocrRun(allPages) {
 }
 
 // ── Wiring ────────────────────────────────────────────────────
+// At module scope, NOT in a 'ui:ready' handler: the core emits 'ui:ready'
+// before scripts_after_app parse and the hook bus does not replay, so a
+// late subscription never fires. This script loads after app.js, so the DOM
+// and window.registerSubtoolbar/openSubtoolbar already exist (same pattern
+// as text_tool's toolbar.js).
 
-PDFHooks.on('ui:ready', () => {
+(function wireOcrToolbar() {
   const btn = document.getElementById('toggle-ocr-tool');
   const bar = document.getElementById('ocr-tool-bar');
   if (!btn || !bar) return;
@@ -264,14 +273,14 @@ PDFHooks.on('ui:ready', () => {
   document.getElementById('ocr-run-page')?.addEventListener('click', () => ocrRun(false));
   document.getElementById('ocr-run-all')?.addEventListener('click', () => ocrRun(true));
   document.getElementById('ocr-cancel')?.addEventListener('click', () => { ocrToolState.cancel = true; });
-});
+})();
 
 // New document: boxes were already reset by the core; drop page-derived state.
 PDFHooks.on('document:loaded', () => {
   ocrToolState.passHint = null;
   ocrToolState.engine = null;
   ocrToolState.cancel = false;
-  setOcrStatus('Byte-exact OCR of the page raster — text lands as editable boxes.');
+  setOcrStatus('idle');
 });
 
 // Programmatic entry point (used by the headless smoke test).
