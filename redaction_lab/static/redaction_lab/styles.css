@@ -1,5 +1,0 @@
-/* redaction_lab — ribbon placement for the Match group.
-   The ribbon's shared primitives (.ribbon-bar, .options-group, .options-label,
-   .toolbar-input-small) come from the core; this file only says where our bar
-   sits in the reading order. */
-#match-options-bar { order: 3; }
