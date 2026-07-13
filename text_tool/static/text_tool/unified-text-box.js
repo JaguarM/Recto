@@ -145,7 +145,8 @@ function spanToUnified(span) {
 
 /**
  * Normalize a raw PDF font name to a CSS-safe family string.
- * Mirrors normFont() in embedded-text-viewer.js.
+ * The single implementation — the old duplicate in the pre-SVG overlay module
+ * is gone.
  */
 function normUtbFont(name) {
   if (!name) return '';

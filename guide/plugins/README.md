@@ -29,9 +29,7 @@ note below.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_lab` | [redaction-lab/](./redaction-lab/) | Finds black bars in the page rasters and turns each into an editable box sized to the bar. Owns the "Match" ribbon bar. | `/redaction/analyze`, `/redaction/analyze-default` |
-| `redaction_matching` | [redaction-matching/](./redaction-matching/) | Owns the candidate-name pool, the name-format settings, and the matches table. Measures which candidates fit a box. | none (uses `text_tool`'s `/widths`) |
-| `redaction_refiner` | [redaction-refiner/](./redaction-refiner/) | One server-side refiner (`EtvRefiner`) that tightens detected box edges against the surrounding embedded text. No UI, no routes. | none |
+
 
 ## Dependency order
 
