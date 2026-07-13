@@ -107,7 +107,9 @@ async function utbFetchSpans(file) {
 // ── Connect redaction boxes to embedded text lines ────────────
 
 function utbConnectRedactionsToLines() {
-  const embeddedBoxes = utbState.boxes.filter(b => b.type === 'embedded');
+  // OCR-read lines are text lines too — a redaction connects to whichever
+  // kind sits on its row (scanned pages only ever have 'ocr' lines)
+  const embeddedBoxes = utbState.boxes.filter(b => b.type === 'embedded' || b.type === 'ocr');
   const redactionBoxes = utbState.boxes.filter(b => b.type === 'redaction');
 
   redactionBoxes.forEach(rb => {
@@ -159,7 +161,8 @@ function utbConnectRedactionsToLines() {
 // ── Nearest-line helper (exposed so text-tool.js can use it) ──
 
 window._utbFindNearestLine = function (pageNum, y, thresholdMultiplier = 2.0) {
-  const pageBoxes = utbState.boxes.filter(b => b.page === pageNum && b.type === 'embedded');
+  const pageBoxes = utbState.boxes.filter(b => b.page === pageNum &&
+    (b.type === 'embedded' || b.type === 'ocr'));
   if (!pageBoxes.length) return null;
 
   let nearest = null;

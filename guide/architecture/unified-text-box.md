@@ -11,11 +11,13 @@ See [embedded-text-viewer.md](../frontend/embedded-text-viewer.md) for the full 
 | `type` | Origin | Role |
 |---|---|---|
 | `embedded` | PDF extractor (`/api/extract-spans`) | Ground-truth text; not user-editable via the text tool |
-| `redaction` | User draws a box on the page (Add Box tool), or an analysis plugin adds one | Snaps font/size to nearest `embedded` box. Its label text is **machine-managed by whichever plugin owns it** — which is why it is not hand-editable (see below). Inert if no such plugin is installed. |
+| `ocr` | An OCR plugin (none in the baseline) | Text read from the page raster itself; behaves like `embedded` (inline-editable, counts as a text line for nearest-line/width flows). Inert when no OCR plugin is installed. |
+| `redaction` | User draws a box on the page (Add Box tool), or an analysis plugin adds one | Snaps font/size to nearest text line (`embedded`/`ocr`). Its label text is **machine-managed by whichever plugin owns it** — which is why it is not hand-editable (see below). Inert if no such plugin is installed. |
 | `harfbuzz` | Inspector tool | Transient overlay that visualises HarfBuzz-computed layout; used to diagnose spacing errors |
 
 Each type renders with a distinct colour (defined in `svg-renderer.js::UTB_TYPE_COLORS`):
 - `embedded` — blue
+- `ocr` — cyan
 - `redaction` — green
 - `harfbuzz` — orange
 
@@ -74,7 +76,7 @@ Each box has an independent `defaultSpaceWidth` boolean and `spaceWidth` float.
 
 ### Inline Text Editing
 
-Double-clicking an `embedded` or `harfbuzz` box calls `enterInlineEdit(box)`, which places a `<foreignObject>` overlay containing a styled `<input>` that matches the box's font, size, weight, style, and colour.
+Double-clicking an `embedded`, `ocr`, or `harfbuzz` box calls `enterInlineEdit(box)`, which places a `<foreignObject>` overlay containing a styled `<input>` that matches the box's font, size, weight, style, and colour.
 
 - `Enter` or click-away → `commitInlineEdit()` saves `box.text` and re-renders.
 - `Escape` → `cancelInlineEdit()` discards changes.

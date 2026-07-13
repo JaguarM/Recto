@@ -170,6 +170,7 @@
   function _typeColor(type) {
     const colors = {
       embedded: 'rgba(0, 100, 255, 0.82)',
+      ocr: 'rgba(0, 200, 255, 0.70)',
       harfbuzz: 'rgba(255, 140, 0, 0.80)',
     };
     return colors[type] || '#000';

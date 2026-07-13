@@ -1,0 +1,32 @@
+/* ocr_tool — subtoolbar styling (matches the core options-bar look) */
+
+#ocr-tool-bar .ocr-run-btn {
+  background: #3c4043;
+  color: #e8eaed;
+  border: 1px solid #5f6368;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#ocr-tool-bar .ocr-run-btn:hover:not(:disabled) {
+  background: #4a4e51;
+}
+
+#ocr-tool-bar .ocr-run-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+#ocr-tool-bar #ocr-cancel {
+  border-color: #d93025;
+  color: #f28b82;
+}
+
+#ocr-tool-bar #ocr-status {
+  max-width: 520px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

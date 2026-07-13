@@ -21,6 +21,15 @@ Verified: with all three redaction plugins removed, `manage.py check` is clean, 
 returns 200, `/redaction/*` correctly 404s, and no redaction markup appears in the rendered
 page. Mind the dependency order below when removing more than one.
 
+## Auto OCR
+
+| Plugin | Docs | What it does | Routes |
+|---|---|---|---|
+| `ocr_tool` | [ocr-tool/](ocr-tool/) | Byte-exact blind-reader OCR of the page rasters (client-side); certified lines land as editable `ocr` text boxes, detected redaction rectangles as `redaction` boxes | *(none — fully client-side)* |
+
+- **Requires `text_tool`** (renders through the unified text box system); works with or without `embedded_text_viewer`.
+- Its `engine/` + `glyphs/` static files are synced verbatim from the external `char_training` repo (`npm run sync:recto` there) — edit the engine there, never in this repo. `npm run recto-test` there smoke-tests the embedded engine end to end.
+
 ## The redaction suite
 
 Three plugins that together restore the original black-bar analysis feature. They are

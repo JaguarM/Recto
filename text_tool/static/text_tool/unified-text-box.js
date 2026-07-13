@@ -8,7 +8,7 @@ function nextUtbId() { return `utb-${++_utbIdCounter}`; }
 class UnifiedTextBox {
   constructor(data) {
     this.id = data.id || nextUtbId();
-    this.type = data.type || 'embedded'; // 'embedded' | 'redaction' | 'harfbuzz'
+    this.type = data.type || 'embedded'; // 'embedded' | 'ocr' | 'redaction' | 'harfbuzz'
     this.page = data.page || 1;
     this.text = data.text || '';
     this.lineId = data.lineId || null;
@@ -171,12 +171,13 @@ window.normUtbFont = normUtbFont;
 // ── Adapter functions for legacy consumers ────────────────────
 
 /**
- * Find the nearest embedded text line to a Y coordinate on a page.
- * Drop-in replacement for findNearestETVLine().
+ * Find the nearest text line (embedded span or OCR-read line) to a Y
+ * coordinate on a page. Drop-in replacement for findNearestETVLine().
  * Returns { y, h, lineId, font, fontSize } or null.
  */
 function utbFindNearestLine(pageNum, y, threshold = 2.0) {
-  const pageBoxes = utbState.boxes.filter(b => b.page === pageNum && b.type === 'embedded');
+  const pageBoxes = utbState.boxes.filter(b => b.page === pageNum &&
+    (b.type === 'embedded' || b.type === 'ocr'));
   if (!pageBoxes.length) return null;
 
   let nearest = null;
@@ -203,7 +204,7 @@ function utbFindNearestLine(pageNum, y, threshold = 2.0) {
  */
 function utbGetSpansCompat() {
   return utbState.boxes
-    .filter(b => b.type === 'embedded')
+    .filter(b => b.type === 'embedded' || b.type === 'ocr')
     .map(b => ({
       page: b.page,
       text: b.text,
