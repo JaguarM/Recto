@@ -10,7 +10,6 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 |-------|------|---------|--------------------|------------|
 | 1 | `pdf_core/hooks.js` | `PDFHooks` (`on`/`off`/`emit`) | — | — (loaded first) |
 | 2 | `pdf_core/state.js` | `state`, `els` | — | DOM elements |
-| 3 | `redaction_matching/api.js` | `addName`, `calculateAllWidths`, `renderCandidates`, `selectRedaction`, `updateAllMatchesView`, `createNewRedaction` | — | `state`, `els` |
 | 4 | `webgl_mask/webgl-mask.js` | `setupWebGLOverlay`, `clearWebGLContexts`, `updateWebGLUniforms`, `fetchMasksAsync`, `refreshWebGLCanvases` | **on:** `ui:ready`, `viewer:clear`, `page:rendered`, `pages:refresh`, `document:loaded` | `state` |
 | 5 | `pdf_core/pdf-viewer.js` | `handleFileUpload`, `goToPage`, `loadDocument` | **emit:** `viewer:clear`, `page:rendered`, `pages:refresh`, `document:loaded` | `state`, `els` |
 | 6 | `pdf_core/ui-events.js` | `updateCSSZoom`, `processZoomFromText`, `renderThumbnails` | **emit:** `zoom:changed` | `state`, `els` |
@@ -23,6 +22,8 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 | 13 | `text_tool/inline-edit.js` | `enterInlineEdit`, `commitInlineEdit`, `cancelInlineEdit` | — | `utbState`, `renderBox`, `exitMicroTypo` |
 | 14 | `text_tool/text-tool.js` | `handleManualAddBox` | — | `utbState`, `renderBox`, all above |
 | 15 | `embedded_text_viewer/etv-fetch.js` | `utbFetchSpans`, `utbConnectRedactionsToLines`, `addEmbeddedTextSpan`, `_utbFindNearestLine` | **on:** `document:loaded` | `utbState`, `renderBox`, `text-tool.js` (runtime) |
+
+> **Not installed:** slot 3 was `redaction_matching/api.js` (`addName`, `calculateAllWidths`, `renderCandidates`, `selectRedaction`, `updateAllMatchesView`, `createNewRedaction`). That plugin does not ship; the remaining `typeof`-guarded call sites in `text_tool` no-op. See [API & Candidate Logic](api-and-logic.md).
 
 > **Note:** Because `PDFHooks` is defined first and subscriptions are order-independent, a plugin can call `PDFHooks.on(...)` at module scope regardless of where it loads. `etv-fetch.js` subscribes to `document:loaded` instead of monkey-patching `window.loadDocument` (the previous, fragile approach). Its cross-module calls into `text_tool` still happen inside event handlers, so the load order remains safe.
 
@@ -42,4 +43,4 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 - [UI Events](ui-events.md) — Zoom, resize, drag, thumbnails
 - [SVG Text Layer](embedded-text-viewer.md) — `UnifiedTextBox` data model, SVG rendering, inline editing, micro-typography
 - [Toolbar & Text Tool](text-tool.md) — Formatting toolbar controls, span fetching, lifecycle hooks
-- [WebGL Mask](webgl-mask.md) — GPU-accelerated redaction mask rendering
+- [WebGL Mask](webgl-mask.md) — GPU-accelerated mask rendering

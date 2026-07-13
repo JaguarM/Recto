@@ -9,9 +9,8 @@ The scripts must load in this exact order because later modules depend on global
 | Order | File | Defines | Depends On |
 |-------|------|---------|------------|
 | 1 | `pdf_core/state.js` | `state`, `els` | DOM elements |
-| 2 | `redaction_matching/api.js` | `addName`, `calculateAllWidths`, `renderCandidates`, `selectRedaction`, `createNewRedaction` | `state`, `els` |
 | 3 | `webgl_mask/webgl-mask.js` | `setupWebGLOverlay`, `clearWebGLContexts`, `updateWebGLUniforms`, `fetchMasksAsync` | `state`, `els` |
-| 4 | `pdf_core/pdf-viewer.js` | `handleFileUpload`, `goToPage`, `loadDocument` | `state`, `els`, `api.js`, `webgl-mask.js` |
+| 4 | `pdf_core/pdf-viewer.js` | `handleFileUpload`, `goToPage`, `loadDocument` | `state`, `els`, `webgl-mask.js` |
 | 5 | `pdf_core/ui-events.js` | `updateCSSZoom`, `processZoomFromText`, `renderThumbnails` | `state`, `els` |
 | 6 | `pdf_core/app.js` | IIFE — wires all event listeners | All above |
 | 7 | `text_tool/unified-text-box.js` | `UnifiedTextBox`, `utbState`, `spanToUnified`, `normUtbFont` | — |
@@ -38,4 +37,4 @@ The scripts must load in this exact order because later modules depend on global
 - [UI Events](ui-events.md) — Zoom, resize, drag, thumbnails
 - [SVG Text Layer](embedded-text-viewer.md) — `UnifiedTextBox` data model, SVG rendering, inline editing, micro-typography
 - [Toolbar & Text Tool](text-tool.md) — Formatting toolbar controls, span fetching, lifecycle hooks
-- [WebGL Mask](webgl-mask.md) — GPU-accelerated redaction mask rendering
+- [WebGL Mask](webgl-mask.md) — GPU-accelerated mask rendering

@@ -1,8 +1,8 @@
 # Unified Toolbar — `toolbar.js` + `text-tool.js`
 
-`toolbar.js` manages the formatting toolbar and is the single code path for reading and writing typography properties on any `UnifiedTextBox`. There is no branching on `box.type` — embedded, redaction, and harfbuzz boxes are all handled identically.
+`toolbar.js` manages the formatting toolbar and is the single code path for reading and writing typography properties on any `UnifiedTextBox`. There is no branching on `box.type` — `embedded`, `redaction`, and `harfbuzz` boxes are all handled identically.
 
-`text-tool.js` handles manual redaction box creation.
+`text-tool.js` handles manual box creation.
 
 ---
 
@@ -35,8 +35,8 @@ toolbar input  =  box.sizePt        (points, both directions)
 
 Points are converted to image pixels exactly once, at the SVG render boundary
 (`GEO.docPtToPx(box.sizePt)` in `svg-renderer.js`). There is no separate px
-`fontSize` field. See [`geometry.js`](../plugins/redaction-lab/width-calculator-documentation.md)
-(`window.GEO`) for the conversion helpers.
+`fontSize` field. The conversion helpers live on `window.GEO`, defined by the core's
+`pdf_core/logic/geometry.py` coordinate contract.
 
 ---
 
@@ -63,7 +63,7 @@ box.sizePt = !isNaN(inputSize) ? inputSize : box.sizePt;
 
 If `box.defaultSpaceWidth` is unchecked and the box has text, the manual `box.spaceWidth` from the slider is used.
 
-If `box.type === 'redaction'` and font or size changed, `calculateWidthsForRedaction(box.id)` is called to recalculate the candidate-word width map.
+If `box.type === 'redaction'` and font or size changed, `calculateWidthsForRedaction(box.id)` is called to recalculate the candidate-word width map. That function is **not defined by any installed plugin** — the call is `typeof`-guarded and currently no-ops. See [API & Candidate Logic](api-and-logic.md).
 
 ---
 
@@ -117,8 +117,8 @@ This replaced the old double-click gesture, which is now used for inline text ed
 
 ## Lifecycle: `text-tool.js`
 
-> Span fetching and the `document:loaded` lifecycle subscription live in `embedded_text_viewer/etv-fetch.js`. `text-tool.js` handles only manual redaction box creation.
+> Span fetching and the `document:loaded` lifecycle subscription live in `embedded_text_viewer/etv-fetch.js`. `text-tool.js` handles only manual box creation.
 
 ### Placing new boxes
 
-- `window.handleManualAddBox(pageNum, x, y)`: delegates to `createNewRedaction()` if available (from `redaction_matching`), otherwise creates a `type='redaction'` box directly. Calls `window._utbFindNearestLine?.()` — defined by `etv-fetch.js` (optional: gracefully absent if ETV plugin is not installed).
+- `window.handleManualAddBox(pageNum, x, y)`: delegates to `createNewRedaction()` if available (from the uninstalled `redaction_matching` plugin), otherwise creates a `type='redaction'` box directly — which, with no matching plugin installed, is always the path taken. Calls `window._utbFindNearestLine?.()` — defined by `etv-fetch.js` (optional: gracefully absent if ETV plugin is not installed).

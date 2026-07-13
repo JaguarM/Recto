@@ -1,6 +1,6 @@
 # Unified Text Box System
 
-All text on a page — extracted PDF text, redaction labels, and HarfBuzz recreations — is stored and rendered through a single data model and a single rendering pipeline. There are no separate state objects for spans, redactions, or HarfBuzz overlays.
+All text on a page — extracted PDF text, manually added boxes, and HarfBuzz recreations — is stored and rendered through a single data model and a single rendering pipeline. There are no separate state objects per box type.
 
 See [embedded-text-viewer.md](../frontend/embedded-text-viewer.md) for the full `UnifiedTextBox` field reference and SVG rendering internals.
 
@@ -11,7 +11,7 @@ See [embedded-text-viewer.md](../frontend/embedded-text-viewer.md) for the full 
 | `type` | Origin | Role |
 |---|---|---|
 | `embedded` | PDF extractor (`/api/extract-spans`) | Ground-truth text; not user-editable via the text tool |
-| `redaction` | User draws a box on the page | Label text managed by the match engine; snaps font/size to nearest `embedded` box |
+| `redaction` | User draws a box on the page (Add Box tool) | Snaps font/size to nearest `embedded` box. **Name is legacy** — it dates from the removed redaction plugin, which used to manage this box's label text. Nothing manages it now. |
 | `harfbuzz` | Inspector tool | Transient overlay that visualises HarfBuzz-computed layout; used to diagnose spacing errors |
 
 Each type renders with a distinct colour (defined in `svg-renderer.js::UTB_TYPE_COLORS`):
@@ -79,7 +79,7 @@ Double-clicking an `embedded` or `harfbuzz` box calls `enterInlineEdit(box)`, wh
 - `Enter` or click-away → `commitInlineEdit()` saves `box.text` and re-renders.
 - `Escape` → `cancelInlineEdit()` discards changes.
 
-`redaction` boxes are excluded — their `labelText` is managed by the match engine.
+`redaction` boxes are excluded by an explicit type guard — a leftover of the removed redaction plugin, which used to manage their `labelText`. See [SVG Text Layer](../frontend/embedded-text-viewer.md#inline-text-editing--inline-editjs).
 
 ### Micro-Typography (Nudge Mode)
 

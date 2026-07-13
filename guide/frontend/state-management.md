@@ -1,6 +1,6 @@
 # State Management — `state.js`
 
-[state.js](https://github.com/JaguarM/EpsteinTool/blob/main/pdf_core/static/pdf_core/state.js) defines two global objects used by all other frontend modules.
+[state.js](https://github.com/JaguarM/Recto/blob/main/pdf_core/static/pdf_core/state.js) defines two global objects used by all other frontend modules.
 
 Both hold **core state only**. Plugin state lives in the plugin — the core object graph
 contains nothing that would dangle if a plugin folder were deleted.
@@ -29,13 +29,13 @@ const state = {
 ```
 
 `currentFile` is the one field plugins reach for: a plugin that needs to run its own
-server-side pass over the open document (as `redaction_lab` does) re-posts this `File` to its
+server-side pass over the open document (as `webgl_mask` does) re-posts this `File` to its
 own endpoint from the `document:loaded` hook. The core does not cache the document
 server-side, so both passes are stateless.
 
 ### `utbState` — Unified Text Box State
 
-All text on the page — embedded PDF text, redaction labels, HarfBuzz recreations — is managed
+All text on the page — embedded PDF text, manually added boxes, HarfBuzz recreations — is managed
 through the global `utbState` object defined in `text_tool/unified-text-box.js`:
 
 ```javascript
@@ -48,9 +48,9 @@ const utbState = {
 };
 ```
 
-A box carries a `type`, and plugins may contribute their own. `redaction_lab` adds boxes with
-`type: 'redaction'` on `document:loaded`; `text_tool` renders and edits them like any other
-box. This is how a plugin puts content on the page without the core knowing it exists.
+A box carries a `type`, and plugins may contribute their own — a plugin adds its boxes on
+`document:loaded` and `text_tool` renders and edits them like any other box. This is how a
+plugin puts content on the page without the core knowing it exists.
 
 See [SVG Text Layer](embedded-text-viewer.md) for the full `UnifiedTextBox` data model.
 
@@ -65,8 +65,7 @@ Core DOM elements are cached at load time to avoid repeated `getElementById` cal
 | **Data** | `pdfFile` |
 
 > **Plugin-owned controls are not in `els`.** The core cache holds no plugin elements — not the
-> webgl mask toggle (`#toggle-webgl`), the reveal-strength slider (`#edge-subtract`), the ETV
-> add-text button, nor `redaction_lab`'s Match controls (`#tolerance`, `#kerning`,
-> `#force-uppercase`). Each plugin looks up its own DOM with `document.getElementById(...)`,
+> webgl mask toggle (`#toggle-webgl`), the reveal-strength slider (`#edge-subtract`), nor the ETV
+> add-text button. Each plugin looks up its own DOM with `document.getElementById(...)`,
 > typically from a `PDFHooks.on('ui:ready', …)` handler — see the
 > [PDFHooks pattern](../tool-expansion-guide.md#frontend-lifecycle--the-pdfhooks-bus).

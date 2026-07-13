@@ -1,12 +1,12 @@
 # SVG Text Layer — `svg-renderer.js` + `unified-text-box.js`
 
-The SVG text layer replaces the old DOM-span system. All text on the page — extracted PDF text, redaction labels, and HarfBuzz recreations — is rendered as SVG `<text>` elements in a per-page `<svg class="text-layer">` that sits directly over the page image.
+The SVG text layer replaces the old DOM-span system. All text on the page — extracted PDF text, manually added boxes, and HarfBuzz recreations — is rendered as SVG `<text>` elements in a per-page `<svg class="text-layer">` that sits directly over the page image.
 
 ---
 
 ## Data Model: `UnifiedTextBox`
 
-Every piece of text is stored as a `UnifiedTextBox` instance inside the global `utbState.boxes` array. There are no separate state objects for spans, redactions, or HarfBuzz text.
+Every piece of text is stored as a `UnifiedTextBox` instance inside the global `utbState.boxes` array. There are no separate state objects per box type.
 
 ```js
 {
@@ -192,7 +192,9 @@ Entering one mode automatically exits the other. Escape exits whichever mode is 
 
 ## Inline Text Editing — `inline-edit.js`
 
-Double-clicking an `embedded` or `harfbuzz` span enters inline text edit mode. Redaction spans are excluded (their text is machine-managed by the match engine).
+Double-clicking an `embedded` or `harfbuzz` span enters inline text edit mode. `redaction` spans are excluded by an explicit type guard.
+
+> **Dangling behaviour.** That guard exists because a `redaction` box's label used to be written by the match engine. With the matching plugin uninstalled, nothing writes it — so a `redaction` box (still the type produced by the Add Box tool) can neither be machine-labelled nor hand-edited. Either widen the guard to allow inline editing, or change the Add Box tool to produce a `harfbuzz` box.
 
 1. `enterInlineEdit(box)`:
    - Guards: only `embedded` / `harfbuzz` types. Exits micro-typo if active.

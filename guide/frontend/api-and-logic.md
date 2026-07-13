@@ -8,7 +8,8 @@
 >
 > `text_tool` still contains `typeof fn === 'function'` guarded call sites for these — they are
 > deliberate, inert re-attachment seams. A reinstalled matching plugin defines those globals and
-> the call sites light up again. The redaction *detection* half lives on in `redaction_lab`.
+> the call sites light up again. The *detection* half — the `redaction_lab` plugin — has since
+> been removed as well, so neither half currently ships.
 
 `api.js` managed the candidate name list, sent width calculation requests to the backend,
 rendered the candidates table, and matched candidate widths against redaction box widths.

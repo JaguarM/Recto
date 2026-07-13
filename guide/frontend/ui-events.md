@@ -1,6 +1,6 @@
 # UI Events — `ui-events.js`
 
-[ui-events.js](https://github.com/JaguarM/EpsteinTool/blob/main/pdf_core/static/pdf_core/ui-events.js) handles zoom controls, redaction box resizing/dragging, and thumbnail rendering.
+[ui-events.js](https://github.com/JaguarM/Recto/blob/main/pdf_core/static/pdf_core/ui-events.js) handles zoom controls, box resizing/dragging, and thumbnail rendering.
 
 ## Zoom
 
@@ -15,9 +15,9 @@ Constrains the zoom to `[minZoom, maxZoom]`, updates `state.currentZoom`, and ap
 
 **Zoom is CSS-only** — no canvas re-rendering is needed because pages are `<img>` elements that scale via CSS transforms.
 
-## Redaction Resizing & Dragging
+## Box Resizing & Dragging
 
-> The old `initResize()` / `initDragRedaction()` overlay handlers have been **removed** from `ui-events.js`. Redaction boxes are now SVG elements, and drag/resize is handled entirely by SVG-native event delegation in [`text_tool/drag-resize.js`](text-tool.md). See [SVG Text Layer](embedded-text-viewer.md).
+> The old `initResize()` / `initDragRedaction()` overlay handlers have been **removed** from `ui-events.js`. Boxes are now SVG elements, and drag/resize is handled entirely by SVG-native event delegation in [`text_tool/drag-resize.js`](text-tool.md). See [SVG Text Layer](embedded-text-viewer.md).
 
 ## Thumbnails
 

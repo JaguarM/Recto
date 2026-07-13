@@ -21,7 +21,7 @@ fi
 
 source venv/bin/activate
 
-echo "Starting Redaction Guesser..."
+echo "Starting Recto..."
 # Ensure requirements are up to date
 pip install -r requirements.txt
 

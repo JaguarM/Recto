@@ -5,8 +5,8 @@ A reference for adding new plugins to Recto. Read the architecture section first
 > **The two ribbon slots.** `options_bar` is a *contextual* bar: `openSubtoolbar()` shows one
 > at a time and hides the rest. `ribbon_bar` is *persistent* — always visible, never hidden.
 > Set where your bar sits in the ribbon's reading order with `order:` in your own stylesheet;
-> the core deliberately never names a plugin's bar in its CSS. `redaction_lab`'s "Match" group
-> is the reference example of a `ribbon_bar`.
+> the core deliberately never names a plugin's bar in its CSS. No installed plugin currently
+> fills the `ribbon_bar` slot — the slot is live, but yours would be the first to use it.
 
 ---
 
@@ -407,7 +407,6 @@ The route is auto-discovered from `tool.url_module` — no need to edit `recto/u
 | `text_tool` | Subtoolbar | `TextTool` | `toggle-fmt` | `fabric-options-bar` |
 | `webgl_mask` | Subtoolbar | `WebglMaskTool` | `toggle-webgl` | `webgl-options-bar` |
 | `embedded_text_viewer` | Subtoolbar | `EmbeddedTextViewerTool` | `toggle-embedded-text` | `etv-bar` |
-| `redaction_lab` | Ribbon bar | `RedactionLabTool` | — | — |
 | `extracted_text` | Logic-only | *(none)* | — | — |
 | `pdf_core` | Core (always on) | *(none)* | — | `text-options-bar` |
 

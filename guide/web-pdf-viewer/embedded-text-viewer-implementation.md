@@ -1,6 +1,6 @@
 # Embedded Text Viewer Implementation
 
-The `embedded_text_viewer` is a fully self-contained, removable Django plugin app that fetches all embedded PDF text spans from the backend and renders them as an SVG overlay directly on top of the main viewer's page canvas. It makes any text hidden under redaction boxes visible by drawing it in blue at its original coordinates.
+The `embedded_text_viewer` is a fully self-contained, removable Django plugin app that fetches all embedded PDF text spans from the backend and renders them as an SVG overlay directly on top of the main viewer's page canvas. It makes any text hidden underneath page graphics visible by drawing it in blue at its original coordinates.
 
 ## Features
 

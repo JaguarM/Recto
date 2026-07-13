@@ -2,6 +2,17 @@
 
 *Epstein Unredactor* → **Recto**, an extensible PDF editor. **Done and verified.**
 
+> **Status — superseded in part.** This is a historical record of the rebrand, kept for the
+> reasoning. Two things have changed since it was written:
+>
+> 1. **`redaction_lab` has been removed.** Where this document describes it as a shipped,
+>    verified plugin, that is no longer true. The four plugins that ship today are
+>    `text_tool`, `embedded_text_viewer`, `webgl_mask`, and `extracted_text`. The removal
+>    needed no change to `pdf_core` — which is exactly what section 3 predicted.
+> 2. **The repository moved** to `github.com/JaguarM/Recto`.
+>
+> The `unbarpdf.com` CSRF origin in `settings.py` is unchanged and still deliberate.
+
 ---
 
 ## 1. The identity
@@ -14,17 +25,17 @@
 > document, renders its pages, and exposes a plugin API — a `PDFTool` registry for server-side
 > tools and a `PDFHooks` event bus for the frontend. Everything else is a plugin: text editing
 > with real font metrics (`text_tool`), embedded-text inspection (`embedded_text_viewer`), GPU
-> region masking (`webgl_mask`), and redaction analysis (`redaction_lab`). Drop a folder in to
+> region masking (`webgl_mask`), and backend extraction (`extracted_text`). Drop a folder in to
 > add a tool; delete the folder to remove it.
 
-Redaction is no longer what this project *is*. It is one plugin, and inside that plugin the
-word "redaction" is the correct domain term and stays.
+Redaction is no longer what this project *is*. It became one plugin — and that plugin has
+since been deleted, which the architecture absorbed without a single change to the core.
 
 | Was | Is |
 |---|---|
 | `epstein_project/` | `recto/` |
 | `guesser_core/` | `pdf_core/` |
-| *(redaction engine inside the core)* | `redaction_lab/` |
+| *(redaction engine inside the core)* | `redaction_lab/` → **since removed** |
 | `assets/names/epstein_names.json` | **deleted** |
 | `text_tool/`, `embedded_text_viewer/`, `webgl_mask/`, `extracted_text/` | unchanged |
 
@@ -102,11 +113,14 @@ Zero occurrences of `epstein` / `unredactor` / `guesser` remain anywhere in the 
 exception is the toolbar's GitHub link to `github.com/JaguarM/EpsteinTool`, and the
 `unbarpdf.com` CSRF origin in settings — both kept as-is at your request.
 
+> **Since updated:** the toolbar link now points at `github.com/JaguarM/Recto`, and `setup.sh` /
+> `run_app.sh` have been de-branded (`/var/www/recto`, `recto.service`). The `unbarpdf.com` CSRF
+> origin still stands.
+
 ---
 
 ## 5. Left open
 
 - **The editor gap you named:** embedded text can be viewed but not saved. That's now a plugin-shaped hole — `pdf_export/`, `POST /export`, taking the original PDF plus `utbState.boxes` and writing text back with PyMuPDF (`page.insert_text`). The box model already carries everything it needs: font family, size in points, position in document space, kerning.
-- The `tool-add-box` button ("Add Redaction Box") still lives in `text_tool` and `embedded_text_viewer` option bars, though it creates a redaction-typed box. Either move it to `redaction_lab` or generalize it into an untyped box tool.
-- `README.md` documented a `setup.sh` that does not exist. The Linux section now gives the two commands directly instead.
-- Deployment docs now say `recto` for the systemd unit and `/var/www/recto`. **An already-deployed server still running `epsteintool.service` keeps working** — rename the unit when convenient.
+- The `tool-add-box` button ("Add Redaction Box") still lives in `text_tool` and `embedded_text_viewer` option bars, and still creates a `type: 'redaction'` box. With `redaction_lab` gone there is nowhere to move it to, so it should be generalized into an untyped box tool. **This is now the most visible loose end:** `inline-edit.js` refuses to edit `redaction` boxes (the match engine used to own their text), so the box this button creates can no longer be given text by any means.
+- Deployment docs say `recto` for the systemd unit and `/var/www/recto`, and `setup.sh` now matches. **An already-deployed server still running `epsteintool.service` will not be touched by the renamed script** — rename the unit, or re-run `setup.sh`, when convenient.

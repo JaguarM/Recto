@@ -25,7 +25,7 @@ The Django backend exposes several HTTP endpoints organized into modular apps.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/webgl/masks` | Generate all redaction masks for an uploaded PDF |
+| `POST` | `/webgl/masks` | Generate masks for all blacked-out regions in an uploaded PDF |
 | `GET` | `/webgl/masks?default=true` | Generate all masks for the default PDF |
 
 ### `embedded_text_viewer` (Embedded Text Viewer Plugin)
@@ -36,15 +36,6 @@ The Django backend exposes several HTTP endpoints organized into modular apps.
 | `GET` | `/embedded-text-viewer/api/extract-spans` | Extract spans from the bundled default PDF |
 
 > **Note:** This endpoint is **optional** — if the `embedded_text_viewer` plugin folder is deleted, the endpoint is removed and the text overlay feature is disabled.
-
-### `redaction_lab` (Redaction Analysis Plugin)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/redaction/analyze` | Detect redaction bars in an uploaded document |
-| `GET` | `/redaction/analyze-default` | Detect redaction bars in the bundled sample document |
-
-> **Note:** These endpoints are **optional** — delete the `redaction_lab` folder and they disappear along with the feature. The core never calls them; the plugin drives itself from the `document:loaded` hook.
 
 ### `extracted_text` (Logic-only)
 
@@ -58,8 +49,8 @@ Open a PDF or image: rasterize its pages, read its embedded text, report its typ
 
 This endpoint runs **no analysis**. It is the core's entire job on ingestion, and its
 payload describes the document, not any conclusion about it. Plugins that analyse the
-document (such as `redaction_lab`) subscribe to the frontend `document:loaded` hook and call
-their own endpoints — see [`POST /redaction/analyze`](#post-redaction-analyze).
+document (such as `webgl_mask`) subscribe to the frontend `document:loaded` hook and call
+their own endpoints — see [`POST /webgl/masks`](#post-webglmasks).
 
 ### Request
 
@@ -101,7 +92,7 @@ Supported formats:
 |-------|------|-------------|
 | `spans` | array | Embedded text spans with font metadata (PDF only, always `[]` for images) |
 | `pdf_fonts` | array | Base-font names declared in the PDF, sorted by number of pages they appear on (most common first). `[]` for images. |
-| `suggested_scale` | int | Recommended "Scale %" for the width calculator. `133` for standard 816 px / 612 pt letter pages. See [Scale & Size Detection](../plugins/redaction-lab/scale-and-size-detection.md). |
+| `suggested_scale` | int | Recommended "Scale %" for the width calculator. `133` for standard 816 px / 612 pt letter pages. |
 | `suggested_size` | float | Dominant body-text font size in points, detected from text spans. `12.0` when unknown. |
 | `page_images` | array | Base64-encoded PNG for each page (one per page, `null` if no embedded image found on that page) |
 | `page_image_type` | string | MIME type of the page images — `"image/png"` for PDFs, the source MIME for image uploads |
@@ -114,55 +105,6 @@ Supported formats:
 |--------|--------|
 | `400` | No file uploaded or no file selected |
 | `500` | Processing error (detail in response body) |
-
----
-
-## `POST /redaction/analyze`
-
-Detect redaction bars in a document. Provided by the **`redaction_lab` plugin** — delete that
-folder and this endpoint ceases to exist.
-
-The frontend re-posts the same file it just sent to `/open-document`, from the
-`document:loaded` hook. Boxes come back in the same image-pixel space the viewer renders, so
-they can be dropped straight onto the page.
-
-### Request
-
-- **Content-Type:** `multipart/form-data`
-- **Body:** Form field `file` — the same PDF or image previously sent to `/open-document`
-
-### Response — `200 OK`
-
-```json
-{
-  "redactions": [
-    {
-      "page": 1,
-      "x": 203.0,
-      "y": 438.0,
-      "width": 121.53,
-      "height": 16.0,
-      "area": 1944.48
-    }
-  ]
-}
-```
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `redactions` | array | Detected redaction boxes, sorted by page, then y, then x. Coordinates are in the embedded image's pixel space. |
-
-### `GET /redaction/analyze-default`
-
-Same payload, for the bundled sample document — mirrors the core's `/open-default` so the
-auto-loaded document gets its boxes without the frontend needing a `File` object it never had.
-
-### Errors
-
-| Status | Reason |
-|--------|--------|
-| `400` | No file uploaded or no file selected |
-| `500` | Detection error (detail in response body) |
 
 ---
 
@@ -229,7 +171,7 @@ Returns a JSON array of available `.ttf` font filenames from `assets/fonts/`.
 
 ## `POST /webgl/masks`
 
-Asynchronously generates redaction masks for an entire document. This is separated from `/open-document` to improve response times for the main layout.
+Asynchronously generates masks for the blacked-out regions of an entire document. This is separated from `/open-document` to improve response times for the main layout.
 
 ### Request
 
@@ -250,7 +192,7 @@ Asynchronously generates redaction masks for an entire document. This is separat
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `mask_images` | array | Array of base64-encoded grayscale PNG masks (one per page). `null` suggests no redactions on that page. |
+| `mask_images` | array | Array of base64-encoded grayscale PNG masks (one per page). `null` suggests no masked regions on that page. |
 
 ---
 

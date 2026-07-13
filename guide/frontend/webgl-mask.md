@@ -1,6 +1,6 @@
 # WebGL Mask — `webgl-mask.js`
 
-[webgl-mask.js](https://github.com/JaguarM/EpsteinTool/blob/main/webgl_mask/static/webgl_mask/webgl-mask.js) renders GPU-accelerated redaction mask overlays.
+[webgl-mask.js](https://github.com/JaguarM/Recto/blob/main/webgl_mask/static/webgl_mask/webgl-mask.js) renders GPU-accelerated mask overlays over blacked-out page regions.
 
 ## Integration — fully hook-driven
 
@@ -94,4 +94,4 @@ The multiplicative recovery correctly reverses anti-aliasing: dark text under a 
 
 ## Context Limits
 
-Browsers enforce ~16 simultaneous WebGL contexts. The lazy `IntersectionObserver` strategy ensures contexts are only allocated for pages with actual redactions, preventing `CONTEXT_LOST_WEBGL` crashes on large documents.
+Browsers enforce ~16 simultaneous WebGL contexts. The lazy `IntersectionObserver` strategy ensures contexts are only allocated for pages with actual masked regions, preventing `CONTEXT_LOST_WEBGL` crashes on large documents.

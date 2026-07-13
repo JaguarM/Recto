@@ -33,8 +33,8 @@ of the stack, so the core never references a plugin by name.
   its own. It provides the `PDFTool` base class + `@register_tool` decorator (backend wiring)
   and the `PDFHooks` event bus (frontend lifecycle wiring).
 - **Plugins** — every actual feature. Text editing (`text_tool`), embedded-text inspection
-  (`embedded_text_viewer`), GPU masking (`webgl_mask`), backend extraction
-  (`extracted_text`), and redaction analysis (`redaction_lab`) are each an independent
+  (`embedded_text_viewer`), GPU masking (`webgl_mask`), and backend extraction
+  (`extracted_text`) are each an independent
   Django app. Each defines a `tool.py` subclassing `PDFTool`; the registry auto-discovers
   its styles, templates, scripts, and URL routes. Plugin JavaScript subscribes to lifecycle
   events with `PDFHooks.on(...)` rather than being called by name.
@@ -46,9 +46,9 @@ of the stack, so the core never references a plugin by name.
 
 The document lifecycle makes the boundary concrete: the core's `/open-document` returns the
 pages and nothing else, then emits `document:loaded`. A plugin that wants to analyse the
-document listens for that event and calls its own endpoint. `redaction_lab` is the reference
-example — it posts the file to `/redaction/analyze` and drops the boxes it gets back onto the
-page. Delete it, and Recto is a PDF editor that has never heard of redactions.
+document listens for that event and calls its own endpoint. `webgl_mask` is the reference
+example — it posts the file to `/webgl/masks` and drops the overlays it gets back onto the
+page. Delete it, and the core is unchanged: it never knew the plugin existed.
 
 ## Navigation
 
@@ -57,4 +57,3 @@ page. Delete it, and Recto is a PDF editor that has never heard of redactions.
 - **[Frontend Implementation](./frontend/javascript-module-reference.md)** — the vanilla JS and WebGL rendering engine.
 - **[API Reference](./api-reference/api-reference.md)** — every JSON endpoint.
 - **[Setup & Deployment](./setup-and-deployment/setup-deployment.md)** — local development and production.
-- **[redaction_lab](./plugins/redaction-lab/backend-logic.md)** — the redaction analysis plugin's internals.

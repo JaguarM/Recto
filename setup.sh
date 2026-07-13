@@ -5,7 +5,7 @@ set -e # Exit immediately if a command fails
 GREEN='\033[0;32m'
 NC='\033[0m'
 
-echo -e "${GREEN}Starting Installation for EpsteinTool...${NC}"
+echo -e "${GREEN}Starting Installation for Recto...${NC}"
 
 # 1. Update system & Install Fonts
 echo -e "${GREEN}Updating system and installing dependencies...${NC}"
@@ -19,7 +19,7 @@ sudo apt-get install -y python3-pip python3-venv nginx fontconfig ttf-mscorefont
 sudo fc-cache -fv
 
 # 2. Setup Virtual Environment
-# We assume we are already in /var/www/epsteintool
+# We assume we are already in /var/www/recto
 if [ ! -d "venv" ]; then
     echo -e "${GREEN}Creating virtual environment...${NC}"
     python3 -m venv venv
@@ -43,22 +43,22 @@ python3 manage.py collectstatic --noinput
 # 4. Setup Service (Using your provided file)
 echo -e "${GREEN}Installing Systemd Service...${NC}"
 # Fix permissions so that www-data can create the socket and write to db.sqlite3
-sudo chown -R www-data:www-data /var/www/epsteintool
+sudo chown -R www-data:www-data /var/www/recto
 
 # ... hardcoded paths.
-sudo cp epsteintool.service /etc/systemd/system/
+sudo cp recto.service /etc/systemd/system/
 
 # Reload the systemd daemon so it sees the new file
 sudo systemctl daemon-reload
-sudo systemctl restart epsteintool
-sudo systemctl enable epsteintool
+sudo systemctl restart recto
+sudo systemctl enable recto
 
 # 5. Setup Nginx (Using your provided file)
 echo -e "${GREEN}Configuring Nginx...${NC}"
-sudo cp nginx_app.conf /etc/nginx/sites-available/epsteintool
+sudo cp nginx_app.conf /etc/nginx/sites-available/recto
 
 # Link it
-sudo ln -sf /etc/nginx/sites-available/epsteintool /etc/nginx/sites-enabled/
+sudo ln -sf /etc/nginx/sites-available/recto /etc/nginx/sites-enabled/
 
 # Remove default Nginx site
 if [ -f /etc/nginx/sites-enabled/default ]; then
