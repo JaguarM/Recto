@@ -23,7 +23,7 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 | 14 | `text_tool/text-tool.js` | `handleManualAddBox` | — | `utbState`, `renderBox`, all above |
 | 15 | `embedded_text_viewer/etv-fetch.js` | `utbFetchSpans`, `utbConnectRedactionsToLines`, `addEmbeddedTextSpan`, `_utbFindNearestLine` | **on:** `document:loaded` | `utbState`, `renderBox`, `text-tool.js` (runtime) |
 
-> **Not installed:** slot 3 was `redaction_matching/api.js` (`addName`, `calculateAllWidths`, `renderCandidates`, `selectRedaction`, `updateAllMatchesView`, `createNewRedaction`). That plugin does not ship; the remaining `typeof`-guarded call sites in `text_tool` no-op. See [API & Candidate Logic](api-and-logic.md).
+> **Slot 3 is the optional-plugin slot.** It is a `scripts_before_viewer` position — after `state.js`, before `pdf-viewer.js` — reserved for plugins that must define globals the baseline modules call behind `typeof` guards. No baseline plugin fills it. See [Optional Plugins](../plugins/).
 
 > **Note:** Because `PDFHooks` is defined first and subscriptions are order-independent, a plugin can call `PDFHooks.on(...)` at module scope regardless of where it loads. `etv-fetch.js` subscribes to `document:loaded` instead of monkey-patching `window.loadDocument` (the previous, fragile approach). Its cross-module calls into `text_tool` still happen inside event handlers, so the load order remains safe.
 
@@ -39,7 +39,7 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 
 - [State Management](state-management.md) — `state` object schema and `els` DOM cache
 - [PDF Viewer](pdf-viewer.md) — File upload, page navigation, rendering
-- [API & Candidate Logic](api-and-logic.md) — Width calculation, candidate matching, sort/pagination
+- [Optional Plugins](../plugins/) — plugins outside the baseline, and the guarded-global seams they attach through
 - [UI Events](ui-events.md) — Zoom, resize, drag, thumbnails
 - [SVG Text Layer](embedded-text-viewer.md) — `UnifiedTextBox` data model, SVG rendering, inline editing, micro-typography
 - [Toolbar & Text Tool](text-tool.md) — Formatting toolbar controls, span fetching, lifecycle hooks

@@ -63,7 +63,7 @@ box.sizePt = !isNaN(inputSize) ? inputSize : box.sizePt;
 
 If `box.defaultSpaceWidth` is unchecked and the box has text, the manual `box.spaceWidth` from the slider is used.
 
-If `box.type === 'redaction'` and font or size changed, `calculateWidthsForRedaction(box.id)` is called to recalculate the candidate-word width map. That function is **not defined by any installed plugin** — the call is `typeof`-guarded and currently no-ops. See [API & Candidate Logic](api-and-logic.md).
+If `box.type === 'redaction'` and font or size changed, `calculateWidthsForRedaction(box.id)` is called to recalculate the candidate-word width map. `text_tool` does not define that function — the call is `typeof`-guarded, so it resolves when a plugin supplies it and no-ops when none does. See [Optional Plugins](../plugins/).
 
 ---
 
@@ -121,4 +121,4 @@ This replaced the old double-click gesture, which is now used for inline text ed
 
 ### Placing new boxes
 
-- `window.handleManualAddBox(pageNum, x, y)`: delegates to `createNewRedaction()` if available (from the uninstalled `redaction_matching` plugin), otherwise creates a `type='redaction'` box directly — which, with no matching plugin installed, is always the path taken. Calls `window._utbFindNearestLine?.()` — defined by `etv-fetch.js` (optional: gracefully absent if ETV plugin is not installed).
+- `window.handleManualAddBox(pageNum, x, y)`: delegates to `createNewRedaction()` if a plugin supplies it, otherwise creates a `type='redaction'` box directly. Calls `window._utbFindNearestLine?.()` — defined by `etv-fetch.js` (optional: gracefully absent if the ETV plugin is not installed). Both are optional seams; the tool works either way.

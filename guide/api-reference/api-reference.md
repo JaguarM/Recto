@@ -43,6 +43,13 @@ No HTTP endpoints. A pure-Python module (`extracted_text/logic/extract.py`) impo
 
 ---
 
+> **Optional plugins document their own endpoints.** This reference covers the core and the
+> baseline plugins only. A plugin that adds routes owns their documentation, in its own folder
+> under [`guide/plugins/`](../plugins/) — so removing the plugin removes its API docs with it,
+> and this page never goes stale.
+
+---
+
 ## `POST /open-document`
 
 Open a PDF or image: rasterize its pages, read its embedded text, report its typography.
@@ -92,7 +99,7 @@ Supported formats:
 |-------|------|-------------|
 | `spans` | array | Embedded text spans with font metadata (PDF only, always `[]` for images) |
 | `pdf_fonts` | array | Base-font names declared in the PDF, sorted by number of pages they appear on (most common first). `[]` for images. |
-| `suggested_scale` | int | Recommended "Scale %" for the width calculator. `133` for standard 816 px / 612 pt letter pages. |
+| `suggested_scale` | int | Recommended "Scale %" for the width calculator. `133` for standard 816 px / 612 pt letter pages. See [Scale & Size Detection](../architecture/scale-and-size-detection.md). |
 | `suggested_size` | float | Dominant body-text font size in points, detected from text spans. `12.0` when unknown. |
 | `page_images` | array | Base64-encoded PNG for each page (one per page, `null` if no embedded image found on that page) |
 | `page_image_type` | string | MIME type of the page images — `"image/png"` for PDFs, the source MIME for image uploads |

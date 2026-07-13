@@ -212,19 +212,23 @@ graph TD
     ETV_V --> ET_LOGIC
 ```
 
-## Not currently installed: `redaction_lab`
+## Optional plugins
 
-An earlier version shipped a `redaction_lab` plugin that detected black bars on a page,
-turned each into an editable box sized to the bar, and ran a `RefinerPipeline` of registered
-refiners to tighten the box edges against the surrounding embedded text. **That plugin has
-been removed**, along with its `detect.py`, `BoxDetector.py`, `SurroundingWordWidth.py`, and
-the whole `refiners/` framework.
+The tree above is the **baseline**: the core plus the four plugins that ship with it. Anything
+else is optional, documented in [`guide/plugins/`](../plugins/), and referenced nowhere in this
+document by design — a baseline doc that named an optional plugin would be a leak.
 
-Nothing in the core depended on it, which is the point: the core never named it, so its
-removal required no change to `pdf_core`. What remains is a set of inert seams —
-`type: 'redaction'` still exists as a `UnifiedTextBox` variant in `text_tool`, and a handful
-of `typeof`-guarded call sites still look for a matching plugin's globals. Reinstall a plugin
-that fills them and they light up again; leave them and they silently no-op.
+An optional plugin attaches through exactly two seams, both of which degrade to nothing when
+it is absent:
+
+- **The `PDFHooks` bus** — it subscribes to `document:loaded`, re-posts `state.currentFile` to
+  its own endpoint, and adds its own boxes or overlays. The core never calls it.
+- **Guarded globals** — `text_tool` contains `typeof fn === 'function'` call sites for
+  functions no baseline plugin defines. An installed plugin defines them and they light up; with
+  none installed they silently no-op.
+
+`UnifiedTextBox` is likewise extensible: a plugin may contribute its own `type` and its own
+fields, which sit inert when the plugin is gone. See [Unified Text Box](./unified-text-box.md).
 
 ## Frontend plugin integration — the `PDFHooks` bus
 

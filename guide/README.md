@@ -57,3 +57,4 @@ page. Delete it, and the core is unchanged: it never knew the plugin existed.
 - **[Frontend Implementation](./frontend/javascript-module-reference.md)** — the vanilla JS and WebGL rendering engine.
 - **[API Reference](./api-reference/api-reference.md)** — every JSON endpoint.
 - **[Setup & Deployment](./setup-and-deployment/setup-deployment.md)** — local development and production.
+- **[Optional Plugins](./plugins/)** — plugins that ship separately from the baseline. Nothing above depends on anything in there.

@@ -33,7 +33,7 @@ The scripts must load in this exact order because later modules depend on global
 
 - [State Management](state-management.md) — `state` object schema and `els` DOM cache
 - [PDF Viewer](pdf-viewer.md) — File upload, page navigation, rendering
-- [API & Candidate Logic](api-and-logic.md) — Width calculation, candidate matching, sort/pagination
+- [Optional Plugins](../plugins/) — plugins outside the baseline, and the guarded-global seams they attach through
 - [UI Events](ui-events.md) — Zoom, resize, drag, thumbnails
 - [SVG Text Layer](embedded-text-viewer.md) — `UnifiedTextBox` data model, SVG rendering, inline editing, micro-typography
 - [Toolbar & Text Tool](text-tool.md) — Formatting toolbar controls, span fetching, lifecycle hooks

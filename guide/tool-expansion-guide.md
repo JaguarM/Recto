@@ -5,8 +5,8 @@ A reference for adding new plugins to Recto. Read the architecture section first
 > **The two ribbon slots.** `options_bar` is a *contextual* bar: `openSubtoolbar()` shows one
 > at a time and hides the rest. `ribbon_bar` is *persistent* — always visible, never hidden.
 > Set where your bar sits in the ribbon's reading order with `order:` in your own stylesheet;
-> the core deliberately never names a plugin's bar in its CSS. No installed plugin currently
-> fills the `ribbon_bar` slot — the slot is live, but yours would be the first to use it.
+> the core deliberately never names a plugin's bar in its CSS. No *baseline* plugin fills the
+> `ribbon_bar` slot — see [Optional Plugins](./plugins/) for a worked example.
 
 ---
 

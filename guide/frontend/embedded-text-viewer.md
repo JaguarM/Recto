@@ -192,9 +192,9 @@ Entering one mode automatically exits the other. Escape exits whichever mode is 
 
 ## Inline Text Editing — `inline-edit.js`
 
-Double-clicking an `embedded` or `harfbuzz` span enters inline text edit mode. `redaction` spans are excluded by an explicit type guard.
+Double-clicking an `embedded` or `harfbuzz` span enters inline text edit mode. `redaction` spans are excluded by an explicit type guard — their label is machine-written by whichever plugin owns the box, so it is not typed by hand.
 
-> **Dangling behaviour.** That guard exists because a `redaction` box's label used to be written by the match engine. With the matching plugin uninstalled, nothing writes it — so a `redaction` box (still the type produced by the Add Box tool) can neither be machine-labelled nor hand-edited. Either widen the guard to allow inline editing, or change the Add Box tool to produce a `harfbuzz` box.
+> **If no plugin owns that type,** a `redaction` box has nothing writing its label and cannot be hand-edited either. That combination is inert rather than harmful — the box still draws, drags, and resizes — but it means the Add Box tool is only fully useful with an analysis plugin installed. See [Optional Plugins](../plugins/).
 
 1. `enterInlineEdit(box)`:
    - Guards: only `embedded` / `harfbuzz` types. Exits micro-typo if active.

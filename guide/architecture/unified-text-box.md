@@ -11,7 +11,7 @@ See [embedded-text-viewer.md](../frontend/embedded-text-viewer.md) for the full 
 | `type` | Origin | Role |
 |---|---|---|
 | `embedded` | PDF extractor (`/api/extract-spans`) | Ground-truth text; not user-editable via the text tool |
-| `redaction` | User draws a box on the page (Add Box tool) | Snaps font/size to nearest `embedded` box. **Name is legacy** — it dates from the removed redaction plugin, which used to manage this box's label text. Nothing manages it now. |
+| `redaction` | User draws a box on the page (Add Box tool), or an analysis plugin adds one | Snaps font/size to nearest `embedded` box. Its label text is **machine-managed by whichever plugin owns it** — which is why it is not hand-editable (see below). Inert if no such plugin is installed. |
 | `harfbuzz` | Inspector tool | Transient overlay that visualises HarfBuzz-computed layout; used to diagnose spacing errors |
 
 Each type renders with a distinct colour (defined in `svg-renderer.js::UTB_TYPE_COLORS`):
@@ -79,7 +79,7 @@ Double-clicking an `embedded` or `harfbuzz` box calls `enterInlineEdit(box)`, wh
 - `Enter` or click-away → `commitInlineEdit()` saves `box.text` and re-renders.
 - `Escape` → `cancelInlineEdit()` discards changes.
 
-`redaction` boxes are excluded by an explicit type guard — a leftover of the removed redaction plugin, which used to manage their `labelText`. See [SVG Text Layer](../frontend/embedded-text-viewer.md#inline-text-editing--inline-editjs).
+`redaction` boxes are excluded by an explicit type guard: their `labelText` is machine-managed by the plugin that owns them, not typed by hand. See [SVG Text Layer](../frontend/embedded-text-viewer.md#inline-text-editing--inline-editjs).
 
 ### Micro-Typography (Nudge Mode)
 

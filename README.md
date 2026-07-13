@@ -15,6 +15,9 @@ API. Everything else is a plugin.
 - **`webgl_mask`** — GPU-accelerated region masking.
 - **`extracted_text`** — backend text extraction and glyph calibration.
 
+Optional plugins ship separately and are documented in [`guide/plugins/`](guide/plugins/) —
+nothing in the core or the list above depends on them.
+
 Plugins are discovered by scanning for any directory containing an `apps.py`. **Drop a
 folder in to add a tool; delete the folder to remove it.** A plugin registers itself with
 `@register_tool`, declares the UI slots it fills (toolbar button, ribbon bar, sidebar,
