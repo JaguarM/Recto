@@ -42,9 +42,8 @@ const els = {
   toggleToolsBtn: document.getElementById('toggle-tools'),
   toolAddBoxBtn: document.getElementById('tool-add-box'),
   toolTextBtn: document.getElementById('tool-text'),
-  // Plugin-owned controls (webgl mask toggle, redaction match settings, ETV
-  // add-text, …) are looked up by the plugins themselves — the core never
-  // references a plugin's DOM.
+  // Plugin-owned controls are looked up by the plugins themselves — the core
+  // never references a plugin's DOM.
 
   // Data
   pdfFile: document.getElementById('pdf-file'),

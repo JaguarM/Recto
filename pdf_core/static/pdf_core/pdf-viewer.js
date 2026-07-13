@@ -64,8 +64,8 @@ async function loadDocument(data, file) {
   if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
 
   // Lifecycle: let plugins react to a freshly loaded document. Plugins that add
-  // their own boxes (redaction_lab) or overlays (webgl masks, embedded-text
-  // spans) hang off this event. `file === null` on the auto-loaded sample doc;
+  // their own boxes or overlays hang off this event — the core names none of
+  // them. `file === null` on the auto-loaded sample doc;
   // `initialFontFamily`/`autoSize` are the document's detected typography, which
   // box-creating plugins use as their defaults.
   await PDFHooks.emit('document:loaded', {

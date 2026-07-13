@@ -17,7 +17,7 @@ window.handleManualAddBox = function (pageNum, x, y) {
     return;
   }
 
-  // Fallback: pure UTB creation (no redaction_matching plugin)
+  // Fallback: pure UTB creation, when no plugin supplies createNewRedaction()
   const nearest = window._utbFindNearestLine?.(pageNum, y);
   const defaultFF = document.getElementById('fabric-font-family')?.value || 'Times New Roman';
   // Font-size input is in POINTS — no DPI conversion.

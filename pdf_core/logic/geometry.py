@@ -3,7 +3,7 @@
 Everything in this project lives in one of two coordinate spaces:
 
 * **Image pixel space (96 DPI)** — the source PNG the server extracts and the
-  frontend renders. Box detection, redaction ``x/y/w/h``, all widths, the SVG
+  frontend renders. Box ``x/y/w/h``, all widths, the SVG
   viewBox and ``state.pageWidth/Height`` are in these pixels. This is the
   canonical geometry space.
 * **PDF point space (72 DPI)** — PyMuPDF text spans/words and font sizes

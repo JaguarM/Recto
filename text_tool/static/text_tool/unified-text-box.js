@@ -51,8 +51,8 @@ class UnifiedTextBox {
     this.manualLabel = data.manualLabel || false;
     this.uppercase = data.uppercase || false;  // force-uppercase display
 
-    // Per-box name-format settings + derived candidate list. Owned by the
-    // redaction_matching plugin; null when it is not installed (nothing in
+    // Per-box name-format settings + derived candidate list. Populated by
+    // whichever plugin owns matching; null when none is installed (nothing in
     // text_tool or the core reads them).
     this.nameSettings = data.nameSettings || null;
     this.candidates = data.candidates || null;

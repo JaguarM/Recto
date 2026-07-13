@@ -3,9 +3,8 @@
 This module knows how to turn a PDF or a raw image into the payload the viewer
 needs to render it: one raster per page, the page geometry, the embedded text
 spans, and the document's typography. It deliberately knows nothing about what
-any plugin will *do* with that document. Analysis of any kind (redaction
-detection, masking, …) belongs to a plugin, which layers itself on top via the
-``document:loaded`` hook.
+any plugin will *do* with that document. Analysis of any kind belongs to a
+plugin, which layers itself on top via the ``document:loaded`` hook.
 
 Coordinates follow ``pdf_core.logic.geometry``: everything the frontend touches
 is in image pixel space (96 DPI), while font sizes stay in points.

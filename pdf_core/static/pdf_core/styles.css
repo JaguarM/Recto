@@ -573,8 +573,8 @@ html {
   align-self: center;
 }
 
-/* A shorter divider used *inside* a group's control row (e.g. between the
-   Tolerance field and the Kerning/Uppercase checkboxes). */
+/* A shorter divider used *inside* a group's control row, between adjacent
+   clusters of controls. */
 .options-divider--inline {
   height: 20px;
   margin: 0 6px;
@@ -613,9 +613,10 @@ html {
   box-shadow: 0 0 0 1px #8ab4f8;
 }
 
-/* Specific Widths */
-#font, #fabric-font-family { min-width: 120px; }
-#size, #calc-scale, #tolerance, #fabric-font-size, #fabric-letter-spacing { width: 44px; text-align: center; }
+/* Specific Widths. Core controls only — a plugin sizes its own inputs in its
+   own stylesheet, so the core never names a plugin's DOM. */
+#fabric-font-family { min-width: 120px; }
+#fabric-font-size, #fabric-letter-spacing { width: 44px; text-align: center; }
 
 /* Customizing Checkboxes */
 .checkbox-lbl {
