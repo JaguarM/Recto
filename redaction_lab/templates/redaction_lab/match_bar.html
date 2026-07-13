@@ -1,0 +1,19 @@
+<!-- redaction_lab/templates/redaction_lab/match_bar.html -->
+<!-- Persistent "Match" region of the ribbon: tuning that drives width matching
+     against a detected bar. Always visible (`.ribbon-bar`, no `.options-bar`
+     marker, so `openSubtoolbar` never hides it). -->
+<div id="match-options-bar" class="ribbon-bar">
+  <div class="options-divider"></div>
+
+  <div class="options-group">
+    <div class="options-group-controls">
+      <span class="options-label">Tolerance</span>
+      <input type="number" id="tolerance" value="0.7" step="0.1" class="toolbar-input-small" style="width: 64px;">
+      <span class="options-label">px</span>
+      <span class="options-divider options-divider--inline"></span>
+      <label class="checkbox-lbl"><input type="checkbox" id="kerning"> Kerning</label>
+      <label class="checkbox-lbl"><input type="checkbox" id="force-uppercase"> Uppercase</label>
+    </div>
+    <div class="options-group-header">Match</div>
+  </div>
+</div>

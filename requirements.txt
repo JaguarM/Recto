@@ -1,0 +1,7 @@
+django
+opencv-python-headless
+numpy
+pymupdf
+pillow
+gunicorn
+uharfbuzz
