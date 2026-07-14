@@ -696,10 +696,13 @@
 
       utbState.selectedId = box.id;
 
-      // Redaction-specific controls
-      els.tol.value = box.tolerance;
-      els.kern.checked = !!box.kerning;
-      els.upper.checked = !!box.uppercase;
+      // Redaction-specific controls — the Match ribbon is owned by the optional
+      // redaction_lab plugin, so these els are absent when it isn't loaded. Guard
+      // each write (can't use ?. on an assignment target) so selection still works
+      // standalone. Reads elsewhere already guard with ?. (see createNewRedaction).
+      if (els.tol) els.tol.value = box.tolerance;
+      if (els.kern) els.kern.checked = !!box.kerning;
+      if (els.upper) els.upper.checked = !!box.uppercase;
 
       // Reflect this box's per-box name-format settings in the sidebar panel.
       syncNameSettingsUI();
