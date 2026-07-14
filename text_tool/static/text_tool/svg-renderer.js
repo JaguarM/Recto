@@ -338,32 +338,32 @@ function _updateSpaceLabels(g, box) {
 
     const hasSpaceOverride = box.spaceWidth != null && !box.defaultSpaceWidth;
 
-    for (let i = 0; i < box.text.length; i++) {
-      if (box.text[i] !== ' ') continue;
+    let i = 0;
+    while (i < box.text.length) {
+      if (box.text[i] !== ' ') { i++; continue; }
 
-      // Skip spaces that have no text following them
-      let hasTextFollowing = false;
-      for (let j = i + 1; j < box.text.length; j++) {
-        if (box.text[j] !== ' ') {
-          hasTextFollowing = true;
-          break;
-        }
-      }
-      if (!hasTextFollowing) continue;
+      // Merge a run of consecutive spaces into one badge (summed width)
+      let end = i;
+      while (end + 1 < box.text.length && box.text[end + 1] === ' ') end++;
 
+      // Trailing spaces (no text after the run) get no badge
+      if (end + 1 >= box.text.length) break;
 
       let spX = 0;
-      let spW = 0;
+      let runW = 0;
       try {
-        const pos = textEl.getStartPositionOfChar(i);
-        spX = pos.x;
-        spW = textEl.getSubStringLength(i, 1);
+        spX = textEl.getStartPositionOfChar(i).x;
+        for (let k = i; k <= end; k++) {
+          const measured = textEl.getSubStringLength(k, 1);
+          runW += hasSpaceOverride ? box.spaceWidth : (box.nativeSpaceWidth || measured || 0);
+        }
       } catch (e) {
+        i = end + 1;
         continue;
       }
 
-      const actualSpaceWidth = hasSpaceOverride ? box.spaceWidth : (box.nativeSpaceWidth || spW || 0);
-      _spacebadge(g, spX + actualSpaceWidth / 2, labelTopY, actualSpaceWidth.toFixed(1), 'rgba(255,210,0,0.92)');
+      _spacebadge(g, spX + runW / 2, labelTopY, runW.toFixed(1), 'rgba(255,210,0,0.92)');
+      i = end + 1;
     }
     return;
   }
@@ -371,21 +371,24 @@ function _updateSpaceLabels(g, box) {
   const xs = computeXPositions(box);
   const hasSpaceOverride = box.spaceWidth != null && !box.defaultSpaceWidth;
 
-  for (let i = 0; i < box.baseCharPositions.length; i++) {
-    const cp = box.baseCharPositions[i];
-    if (cp.c !== ' ') continue;
+  let i = 0;
+  while (i < box.baseCharPositions.length) {
+    if (box.baseCharPositions[i].c !== ' ') { i++; continue; }
 
-    // Skip spaces that have no text following them
-    let hasTextFollowing = false;
-    for (let j = i + 1; j < box.baseCharPositions.length; j++) {
-      if (box.baseCharPositions[j].c !== ' ') {
-        hasTextFollowing = true;
-        break;
-      }
+    // Extend over the whole run of consecutive spaces (OCR encodes wide
+    // gaps as multiple space chars) — one badge with the summed width.
+    let end = i;
+    while (end + 1 < box.baseCharPositions.length && box.baseCharPositions[end + 1].c === ' ') end++;
+
+    // Trailing spaces (no text after the run) get no badge
+    if (end + 1 >= box.baseCharPositions.length) break;
+
+    let runW = 0;
+    for (let k = i; k <= end; k++) {
+      runW += hasSpaceOverride ? box.spaceWidth : (box.baseCharPositions[k].w || 0);
     }
-    if (!hasTextFollowing) continue;
-    const spW = hasSpaceOverride ? box.spaceWidth : (cp.w || 0);
-    _spacebadge(g, xs[i] + spW / 2, labelTopY, spW.toFixed(1), 'rgba(255,210,0,0.92)');
+    _spacebadge(g, xs[i] + runW / 2, labelTopY, runW.toFixed(1), 'rgba(255,210,0,0.92)');
+    i = end + 1;
   }
 }
 
