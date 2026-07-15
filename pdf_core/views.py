@@ -20,7 +20,6 @@ def index(request):
     tools = PDFToolRegistry.get_tools()
     return render(request, 'pdf_core/index.html', {
         'tools': tools,
-        'has_any_sidebar': any(t.sidebar for t in tools.values()),
     })
 
 

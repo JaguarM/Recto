@@ -37,13 +37,11 @@ const els = {
   prevPageBtn: document.getElementById('prev-page'),
   nextPageBtn: document.getElementById('next-page'),
 
-  // Tools Sidebar
-  toolsSidebar: document.getElementById('tools-sidebar'),
-  toggleToolsBtn: document.getElementById('toggle-tools'),
   toolAddBoxBtn: document.getElementById('tool-add-box'),
   toolTextBtn: document.getElementById('tool-text'),
-  // Plugin-owned controls are looked up by the plugins themselves — the core
-  // never references a plugin's DOM.
+  // Plugin-owned controls (including the right-panel "tools sidebar" and its
+  // toggle) are looked up by the plugins themselves — the core never
+  // references a plugin's DOM.
 
   // Data
   pdfFile: document.getElementById('pdf-file'),

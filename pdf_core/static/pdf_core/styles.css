@@ -365,125 +365,9 @@ html {
   image-rendering: pixelated;
 }
 
-/* ----------------- Tools Sidebar (Right) ----------------- */
-#tools-sidebar {
-  width: 320px;
-  background-color: #323639;
-  border-left: 1px solid rgba(255, 255, 255, 0.1);
-  overflow-y: auto;
-  transition: width 0.2s, padding 0.2s;
-  display: flex;
-  flex-direction: column;
-  padding: 16px;
-  color: #e8eaed;
-  font-family: 'Inter', system-ui, sans-serif;
-}
-
-#tools-sidebar.hidden {
-  width: 0;
-  padding: 0;
-  border-left: none;
-  overflow: hidden;
-}
-
-.tool-card {
-  background-color: #202124;
-  border-radius: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.05);
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-}
-
-.tool-card h2 {
-  font-size: 14px;
-  font-weight: 600;
-  margin-bottom: 12px;
-  color: #e8eaed;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.tool-card h2 span.step {
-  background: #8ab4f8;
-  /* Google blue for dark mode */
-  color: #202124;
-  border-radius: 50%;
-  width: 20px;
-  height: 20px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 11px;
-  font-weight: bold;
-}
-
-
-/* Sub-controls inside Tool Card */
-.control-group {
-  margin-bottom: 10px;
-}
-
-.control-group label {
-  display: block;
-  font-size: 12px;
-  color: #9aa0a6;
-  margin-bottom: 4px;
-}
-
-.tool-input {
-  width: 100%;
-  background-color: #323639;
-  border: 1px solid #5f6368;
-  color: #e8eaed;
-  padding: 6px 8px;
-  border-radius: 4px;
-  font-size: 13px;
-}
-
-.tool-input:focus {
-  outline: none;
-  border-color: #8ab4f8;
-}
-
-.tool-btn {
-  background-color: #8ab4f8;
-  color: #202124;
-  border: none;
-  padding: 6px 12px;
-  border-radius: 4px;
-  font-weight: 500;
-  font-size: 13px;
-  cursor: pointer;
-  width: 100%;
-  transition: background-color 0.15s;
-}
-
-.tool-btn:hover {
-  background-color: #aecbfa;
-}
-
-.tool-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.tool-btn.secondary {
-  background-color: transparent;
-  color: #8ab4f8;
-  border: 1px solid #5f6368;
-}
-
-.tool-btn.secondary:hover {
-  background-color: rgba(138, 180, 248, 0.08);
-}
-
-.tool-grid {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
-}
+/* The right-panel "tools sidebar" (#tools-sidebar) and its inner primitives
+   (.tool-card, .tool-input, .tool-btn, …) are owned by the plugin that provides
+   that panel — see redaction_matching/static/redaction_matching/styles.css. */
 
 /* ----------------- Sub-Toolbar (Ribbon) ----------------- */
 #unified-options-bar-container {
@@ -750,8 +634,9 @@ html {
     display: none; /* Zoom is secondary on mobile; pinch-zoom is preferred */
   }
 
-  /* Overlay Sidebars */
-  #sidebar, #tools-sidebar {
+  /* Overlay Sidebars — the left thumbnails panel. The right-panel overlay
+     rules (#tools-sidebar) live with the plugin that owns that panel. */
+  #sidebar {
     position: fixed;
     top: 56px; /* Below toolbar */
     bottom: 0;
@@ -759,9 +644,6 @@ html {
     z-index: 1000;
     box-shadow: 0 0 40px rgba(0,0,0,0.5);
     border: none;
-  }
-
-  #sidebar {
     left: 0;
     transform: translateX(0);
     transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
@@ -770,18 +652,6 @@ html {
   #sidebar.hidden {
     transform: translateX(-100%);
     display: flex !important; /* Keep flex context for animation */
-    pointer-events: none;
-  }
-
-  #tools-sidebar {
-    right: 0;
-    transform: translateX(0);
-    transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-  }
-
-  #tools-sidebar.hidden {
-    transform: translateX(100%);
-    display: flex !important;
     pointer-events: none;
   }
 

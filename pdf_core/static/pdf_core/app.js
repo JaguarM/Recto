@@ -8,30 +8,8 @@
         els.toggleSidebarBtn.classList.toggle('active');
       });
 
-      // Right sidebars are mutually exclusive: tools-sidebar vs cmp-panel
-      function openRightPanel(panelToShow, btnToActivate) {
-        const cmpPanel   = document.getElementById('cmp-panel');
-        const toggleCmp  = document.getElementById('toggle-cmp');
-        els.toolsSidebar?.classList.add('hidden');
-        cmpPanel?.classList.add('hidden');
-        els.toggleToolsBtn?.classList.remove('active');
-        toggleCmp?.classList.remove('active');
-        if (panelToShow) {
-          panelToShow.classList.remove('hidden');
-          btnToActivate?.classList.add('active');
-        }
-      }
-
-      if (els.toggleToolsBtn) {
-        els.toggleToolsBtn.addEventListener('click', () => {
-          if (els.toolsSidebar.classList.contains('hidden')) {
-            openRightPanel(els.toolsSidebar, els.toggleToolsBtn);
-          } else {
-            openRightPanel(null, null);
-          }
-        });
-      }
-
+      // Right-panel toggles (e.g. the candidates "tools sidebar") are wired by
+      // the plugins that own those panels — the core knows of no right panel.
 
       if (els.toolAddBoxBtn) {
         els.toolAddBoxBtn.addEventListener('click', () => {

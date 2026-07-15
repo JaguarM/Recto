@@ -65,6 +65,19 @@
       nudgeBtn.disabled = !box.baseCharPositions?.length;
     }
 
+    // Match group — redaction-only tuning (Tolerance / Kerning / Uppercase).
+    // Reveal it for redaction boxes and reflect the box's values; hide it
+    // otherwise (tolerance/uppercase are meaningless on ordinary text). The
+    // shared IDs are also read by whichever matching plugin is installed.
+    const isRedaction = box.type === 'redaction';
+    el('fabric-match-group')?.classList.toggle('hidden', !isRedaction);
+    el('fabric-match-divider')?.classList.toggle('hidden', !isRedaction);
+    if (isRedaction) {
+      const tolI  = el('tolerance');       if (tolI)  tolI.value    = box.tolerance;
+      const kernI = el('kerning');         if (kernI) kernI.checked = !!box.kerning;
+      const upI   = el('force-uppercase'); if (upI)   upI.checked   = !!box.uppercase;
+    }
+
     // Formatting is contextual: reveal the Font/Style/Spacing groups whenever a
     // box becomes the active selection. Every selection path (click, add-box,
     // sidebar row) routes through here, so this is the single reveal point.
@@ -267,6 +280,30 @@
       el('fabric-nudge-mode')?.classList.add('active');
     }
   });
+
+  // Match controls (Tolerance / Kerning / Uppercase) — tuning that drives width
+  // matching against a redaction bar, applied to the selected redaction box.
+  // All calls into a matching plugin are guarded (typeof …) so text_tool stays
+  // standalone; the controls are inert when no such plugin is installed.
+  function applyMatchControls(changed) {
+    const box = getSelected();
+    if (!box || box.type !== 'redaction') return;
+    box.tolerance = parseFloat(el('tolerance')?.value) || 0;
+    box.kerning   = el('kerning')?.checked ?? box.kerning;
+    box.uppercase = el('force-uppercase')?.checked ?? box.uppercase;
+    if (changed === 'tolerance') {
+      // Width is unchanged by tolerance — only which candidates pass.
+      if (typeof updateAllMatchesView === 'function') updateAllMatchesView(box.id);
+    } else {
+      // Re-render first so the live SVG element carries the updated kerning
+      // style before anything measures it via getBBox().
+      renderBox(box);
+      if (typeof calculateWidthsForRedaction === 'function') calculateWidthsForRedaction(box.id);
+    }
+  }
+  el('tolerance')     ?.addEventListener('change', () => applyMatchControls('tolerance'));
+  el('kerning')       ?.addEventListener('change', () => applyMatchControls('kerning'));
+  el('force-uppercase')?.addEventListener('change', () => applyMatchControls('uppercase'));
 
   // Space-label toggle button
   el('toggle-space-labels')?.addEventListener('click', () => {

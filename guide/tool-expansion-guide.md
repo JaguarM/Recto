@@ -65,8 +65,10 @@ class PDFTool:
     options_bar = None                # contextual ribbon bar — one at a time,
                                       #   switched by openSubtoolbar()
     ribbon_bar = None                 # persistent ribbon bar — always visible
-    sidebar = None                    # template path for sidebar panel
-    has_sidebar_toggle = False        # contributes a sidebar toggle button
+    sidebar = None                    # template path for sidebar panel — the
+                                      #   template provides its own container +
+                                      #   toggle button + wiring; the core hosts
+                                      #   no right panel of its own
 
     # Script injection
     scripts_before_viewer = ()        # scripts loaded before pdf-viewer.js
@@ -93,7 +95,7 @@ hooks.js                  ← defines window.PDFHooks (loaded first)
   → [tool.scripts_before_viewer for each registered tool]
   → pdf-viewer.js
   → ui-events.js
-  → app.js                ← defines window.openSubtoolbar, window.registerSubtoolbar, window.openRightPanel; emits 'ui:ready'
+  → app.js                ← defines window.openSubtoolbar, window.registerSubtoolbar; emits 'ui:ready'
   → [tool.scripts_after_app for each registered tool]
 ```
 
@@ -277,8 +279,7 @@ from pdf_core.registry import register_tool
 class MyPanel(PDFTool):
     name = 'my_panel'
     toolbar_button = 'my_panel/toolbar_button.html'
-    sidebar = 'my_panel/panel.html'
-    has_sidebar_toggle = True    # if this tool should control sidebar visibility
+    sidebar = 'my_panel/panel.html'    # the template provides its OWN container
     scripts_after_app = [
         {'path': 'my_panel/my-panel.js', 'version': 'v=1'},
     ]
@@ -308,57 +309,42 @@ class MyPanelConfig(AppConfig):
 
 ### Step 4 — Panel HTML
 
-The panel is included inside `#tools-sidebar` via the `sidebar` field. The template auto-includes it when iterating registered tools.
+The `sidebar` template is auto-included after the viewer when iterating registered
+tools. The core provides **no** right-panel host, so **your template supplies its
+own container** — including its own CSS (put the container/width/hidden styles in
+your plugin's stylesheet, not the core's). Delete the folder and nothing about a
+right panel remains in the core.
 
 ```html
 <!-- templates/my_panel/panel.html -->
-<div id="my-panel">
+<aside id="my-panel" class="hidden">
   <div id="my-panel-header">
     <span>My Panel</span>
   </div>
   <!-- panel content -->
-</div>
+</aside>
 ```
 
 ### Step 5 — JavaScript Toggle
 
-Right panels manage their own open/close. When **opening**, close other sidebars to enforce mutual exclusivity:
+Your panel owns its own open/close — the core wires nothing. Look up your own
+button and container and toggle them:
 
 ```js
 // static/my_panel/my-panel.js
-
-function openMyPanel() {
-  // Mutual exclusivity: close the tools sidebar if open
-  document.getElementById('tools-sidebar')?.classList.add('hidden');
-  document.getElementById('toggle-tools')?.classList.remove('active');
-
-  document.getElementById('my-panel').classList.remove('hidden');
-  document.getElementById('toggle-my-panel').classList.add('active');
-}
-
-function closeMyPanel() {
-  document.getElementById('my-panel').classList.add('hidden');
-  document.getElementById('toggle-my-panel').classList.remove('active');
-}
-
 document.getElementById('toggle-my-panel')?.addEventListener('click', () => {
-  document.getElementById('my-panel').classList.contains('hidden')
-    ? openMyPanel()
-    : closeMyPanel();
+  const panel = document.getElementById('my-panel');
+  const btn   = document.getElementById('toggle-my-panel');
+  const nowHidden = panel?.classList.toggle('hidden');
+  btn?.classList.toggle('active', !nowHidden);
 });
 ```
 
-### Step 6 — Make `#tools-sidebar` Aware of Your Panel
+If two right panels can be open at once and you want them mutually exclusive,
+coordinate that **between the plugins** (e.g. each hides the other by id in its
+own open handler) — the core provides no shared right-panel coordinator.
 
-When `#tools-sidebar` opens, it should close your panel. Add your panel to the `openRightPanel` function in `app.js`:
-
-```js
-// pdf_core/static/pdf_core/app.js — inside openRightPanel()
-document.getElementById('my-panel')?.classList.add('hidden');
-document.getElementById('toggle-my-panel')?.classList.remove('active');
-```
-
-That's it. No changes to `index.html`, `urls.py`, or `settings.py`.
+That's it. No changes to `index.html`, `app.js`, `urls.py`, or `settings.py`.
 
 ---
 
@@ -425,9 +411,9 @@ The route is auto-discovered from `tool.url_module` — no need to edit `recto/u
 4. **Create templates** — `toolbar_button.html`, `options_bar.html`, and/or `sidebar.html`
 5. **Create static assets** — JS and CSS files referenced in your tool class
 6. **Wire runtime behaviour through `PDFHooks`** — subscribe to lifecycle events (`page:rendered`, `document:loaded`, …); for a subtoolbar in `scripts_after_app`, call `registerSubtoolbar(btn)` and add your click handlers at module scope (NOT inside `ui:ready` — it has already fired)
-7. *(Right panel only)* add your panel to the `openRightPanel()` hide list in `app.js` (the right-panel pattern is not yet fully hook-driven)
+7. *(Right panel only)* provide your own container element, its CSS, and its toggle wiring inside the plugin — the core hosts no right panel
 
-**Zero changes needed to**: `index.html`, `recto/urls.py`, `settings.py`, `app.js` (for subtoolbars), or any other plugin's code.
+**Zero changes needed to**: `index.html`, `recto/urls.py`, `settings.py`, `app.js`, or any other plugin's code.
 
 **To disable a plugin**: delete its folder. Django's dynamic discovery in `settings.py` won't find it and the app simply won't load.
 
@@ -438,7 +424,7 @@ The route is auto-discovered from `tool.url_module` — no need to edit `recto/u
 - **Never use `display: block` directly.** Always toggle the `.hidden` class. Sidebars use CSS transitions keyed on `.hidden`; bypassing it breaks animations.
 - **Use optional chaining (`?.`) on all `getElementById` calls** in plugin JS. This ensures your script doesn't throw if the plugin is removed.
 - **Guard `openSubtoolbar` calls** with `typeof openSubtoolbar === 'function'` when your script is in `scripts_before_viewer`. Scripts in `scripts_after_app` can reference it directly.
-- **Integrate through `PDFHooks`, not by name.** Subscribe to lifecycle events instead of having the core call your functions, and look up your own DOM with `document.getElementById`. A subtoolbar plugin's only core touchpoints are the generic `registerSubtoolbar` + `openSubtoolbar`; the right-panel pattern still has a small `openRightPanel` touchpoint in `app.js`.
+- **Integrate through `PDFHooks`, not by name.** Subscribe to lifecycle events instead of having the core call your functions, and look up your own DOM with `document.getElementById`. A subtoolbar plugin's only core touchpoints are the generic `registerSubtoolbar` + `openSubtoolbar`; a right panel is fully plugin-owned (its own container, CSS, and toggle wiring) with no core touchpoint at all.
 - **Keep plugin logic self-contained.** Views, URLs, business logic, and DOM all belong in the plugin app.
 - **Disable by deleting the folder.** `settings.py` dynamically scans for plugin directories — removing the folder is the off-switch. No manual `INSTALLED_APPS` edits needed.
 - **Use tuples or lists for tool config fields.** The base class uses tuples for immutable defaults, but subclasses can safely assign lists. Both work in Django template iteration.

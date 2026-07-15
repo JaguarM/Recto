@@ -11,15 +11,15 @@ plugin.** If you ever find a baseline document naming one, that's a leak worth f
 
 Three steps, and nothing else in the repo or the guide has to change:
 
-1. Delete the app folder (e.g. `redaction_lab/`). Plugin discovery scans the top level for
-   directories containing an `apps.py`, so it simply stops being found — no `settings.py`,
+1. Delete the app folder (e.g. `redaction_matching/`). Plugin discovery scans the top level
+   for directories containing an `apps.py`, so it simply stops being found — no `settings.py`,
    `urls.py`, or `index.html` edit.
-2. Delete its docs folder (e.g. `guide/plugins/redaction-lab/`).
+2. Delete its docs folder (e.g. `guide/plugins/redaction-matching/`).
 3. Delete its row from the table below.
 
-Verified: with all three redaction plugins removed, `manage.py check` is clean, `GET /`
-returns 200, `/redaction/*` correctly 404s, and no redaction markup appears in the rendered
-page. Mind the dependency order below when removing more than one.
+Verified: with `redaction_matching` removed, `manage.py check` is clean, `GET /` returns 200,
+and no candidates sidebar (`#tools-sidebar`) or its toggle button appears in the rendered
+page — the panel, its CSS, and its wiring all live in the plugin.
 
 ## Auto OCR
 
@@ -30,31 +30,32 @@ page. Mind the dependency order below when removing more than one.
 - **Requires `text_tool`** (renders through the unified text box system); works with or without `embedded_text_viewer`.
 - Its `engine/` + `glyphs/` static files are synced verbatim from the external `char_training` repo (`npm run sync:recto` there) — edit the engine there, never in this repo. `npm run recto-test` there smoke-tests the embedded engine end to end.
 
-## The redaction suite
+## Redaction matching
 
-Three plugins that together restore the original black-bar analysis feature. They are
-independent Django apps, but they are **not independent of each other** — see the dependency
-note below.
+Candidate-name matching against redaction bars: it owns the candidates right panel (the
+`#tools-sidebar` host, its toggle button, CSS, and wiring) plus the name pool, name-format
+settings, and matches table. It does **not** detect bars itself — it matches names against
+whatever `redaction` boxes exist on the page, so it needs a detector installed to have
+anything to work on.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-
+| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar | *(none — fully client-side)* |
 
 ## Dependency order
 
 ```
-redaction_refiner ──hard import──> redaction_lab ──> pdf_core
 redaction_matching ──runtime globals──> text_tool ──> pdf_core
+ocr_tool           ──runtime globals──> text_tool ──> pdf_core
 ```
 
-- **`redaction_refiner` requires `redaction_lab`.** It imports `redaction_lab.logic.refiners.*`
-  directly, so removing `redaction_lab` while `redaction_refiner` is installed is an
-  `ImportError` at startup. Remove the refiner first, or remove both together.
-- **`redaction_lab` does not require `redaction_refiner`.** `detect.py` builds its pipeline
-  from `RefinerRegistry.build_pipeline()`, so with no refiners registered the registry is
-  empty and boxes pass through unrefined rather than crashing.
 - **`redaction_matching` attaches to `text_tool` through guarded globals**, not imports. See
   [the seam contract](#the-seam-contract).
+- **It needs a source of `redaction` boxes.** `ocr_tool` emits them as it reads, and the
+  Add-Box tool creates them manually; without either, there is simply nothing to match.
+- **The Match controls** (Tolerance / Kerning / Uppercase) live in `text_tool`'s formatting
+  ribbon under shared element IDs (`#tolerance`, `#kerning`, `#force-uppercase`).
+  `redaction_matching` reads them if present and no-ops if not.
 
 ## The seam contract
 

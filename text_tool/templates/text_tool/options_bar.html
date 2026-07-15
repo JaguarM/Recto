@@ -82,4 +82,23 @@
     <div class="options-group-header">Spacing</div>
   </div>
 
+  <!-- Match group — tuning that drives width matching against a detected bar.
+       Revealed only while a redaction box is selected (see syncToolbarToBox in
+       toolbar.js). The #tolerance / #kerning / #force-uppercase IDs are read by
+       whichever matching plugin is installed; they are inert when none is. -->
+  <div class="options-divider hidden" id="fabric-match-divider"></div>
+
+  <div class="options-group hidden" id="fabric-match-group">
+    <div class="options-group-controls">
+      <span class="options-label">Tolerance</span>
+      <input type="number" id="tolerance" value="0.7" step="0.1" class="toolbar-input-small"
+             style="width: 44px; text-align: center;">
+      <span class="options-label">px</span>
+      <span class="options-divider options-divider--inline"></span>
+      <label class="checkbox-lbl"><input type="checkbox" id="kerning"> Kerning</label>
+      <label class="checkbox-lbl"><input type="checkbox" id="force-uppercase"> Uppercase</label>
+    </div>
+    <div class="options-group-header">Match</div>
+  </div>
+
 </div>

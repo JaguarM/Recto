@@ -41,7 +41,8 @@
     });
 
     Object.assign(els, {
-      // Match ribbon — owned by the redaction_lab plugin, absent without it.
+      // Match controls — live in text_tool's formatting ribbon (shared IDs).
+      // Absent when text_tool isn't installed; every read/write guards for that.
       tol:   document.getElementById('tolerance'),
       kern:  document.getElementById('kerning'),
       upper: document.getElementById('force-uppercase'),
@@ -373,6 +374,18 @@
       });
     });
 
+    // Candidates-sidebar toggle. The host <aside>, its toggle button, CSS and
+    // this wiring all belong to this plugin — the core owns no right panel. The
+    // panel starts open (button carries `active`); clicking collapses/expands.
+    document.addEventListener('DOMContentLoaded', () => {
+      const btn   = document.getElementById('toggle-tools');
+      const panel = document.getElementById('tools-sidebar');
+      btn?.addEventListener('click', () => {
+        const nowHidden = panel?.classList.toggle('hidden');
+        btn.classList.toggle('active', !nowHidden);
+      });
+    });
+
     // ── Candidate management ──────────────────────────────────
 
     function addName() {
@@ -696,10 +709,10 @@
 
       utbState.selectedId = box.id;
 
-      // Redaction-specific controls — the Match ribbon is owned by the optional
-      // redaction_lab plugin, so these els are absent when it isn't loaded. Guard
-      // each write (can't use ?. on an assignment target) so selection still works
-      // standalone. Reads elsewhere already guard with ?. (see createNewRedaction).
+      // Redaction-specific controls — the Match controls live in text_tool's
+      // formatting ribbon, so these els are absent when text_tool isn't loaded.
+      // Guard each write (can't use ?. on an assignment target) so selection
+      // still works standalone. Reads elsewhere already guard with ?..
       if (els.tol) els.tol.value = box.tolerance;
       if (els.kern) els.kern.checked = !!box.kerning;
       if (els.upper) els.upper.checked = !!box.uppercase;

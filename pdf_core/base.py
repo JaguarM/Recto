@@ -19,8 +19,9 @@ class PDFTool:
     options_bar = None                # contextual ribbon bar — one at a time,
                                       # switched by openSubtoolbar()
     ribbon_bar = None                 # persistent ribbon bar — always visible
-    sidebar = None                    # template path for sidebar panel
-    has_sidebar_toggle = False        # contributes a sidebar toggle button
+    sidebar = None                    # template path for sidebar panel (a plugin
+                                      # that declares one provides its own host
+                                      # element + toggle button + wiring)
 
     # Script injection
     scripts_before_viewer = ()        # {'path': '...', 'version': '...'} dicts

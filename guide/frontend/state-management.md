@@ -61,7 +61,7 @@ Core DOM elements are cached at load time to avoid repeated `getElementById` cal
 | Group | Elements |
 |-------|----------|
 | **Viewer** | `dragOverlay`, `viewerContainer`, `viewer`, `titleElem`, `pageCountElem`, `pageInputElem`, `zoomInputElem`, `zoomInBtn`, `zoomOutBtn`, `sidebar`, `toggleSidebarBtn`, `thumbnailView`, `prevPageBtn`, `nextPageBtn` |
-| **Tools** | `toolsSidebar`, `toggleToolsBtn`, `toolAddBoxBtn`, `toolTextBtn` |
+| **Tools** | `toolAddBoxBtn`, `toolTextBtn` |
 | **Data** | `pdfFile` |
 
 > **Plugin-owned controls are not in `els`.** The core cache holds no plugin elements — not the

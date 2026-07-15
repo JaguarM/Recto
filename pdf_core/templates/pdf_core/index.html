@@ -135,16 +135,14 @@
         </div>
       </main>
 
-      <!-- AI Tools Sidebar (Right) -->
-      <aside id="tools-sidebar"{% if not has_any_sidebar %} class="hidden"{% endif %}>
-
-        {% for name, tool in tools.items %}
-          {% if tool.sidebar %}
-        {% include tool.sidebar %}
-          {% endif %}
-        {% endfor %}
-
-      </aside>
+      <!-- Right-panel host: each plugin that declares a `sidebar` provides its
+           own container element. The core just drops them in after the viewer;
+           it owns no panel of its own. -->
+      {% for name, tool in tools.items %}
+        {% if tool.sidebar %}
+      {% include tool.sidebar %}
+        {% endif %}
+      {% endfor %}
 
 
     </div>

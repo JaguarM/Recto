@@ -13,7 +13,7 @@ Scripts load in this order. Cross-module integration happens through the **`PDFH
 | 4 | `webgl_mask/webgl-mask.js` | `setupWebGLOverlay`, `clearWebGLContexts`, `updateWebGLUniforms`, `fetchMasksAsync`, `refreshWebGLCanvases` | **on:** `ui:ready`, `viewer:clear`, `page:rendered`, `pages:refresh`, `document:loaded` | `state` |
 | 5 | `pdf_core/pdf-viewer.js` | `handleFileUpload`, `goToPage`, `loadDocument` | **emit:** `viewer:clear`, `page:rendered`, `pages:refresh`, `document:loaded` | `state`, `els` |
 | 6 | `pdf_core/ui-events.js` | `updateCSSZoom`, `processZoomFromText`, `renderThumbnails` | **emit:** `zoom:changed` | `state`, `els` |
-| 7 | `pdf_core/app.js` | IIFE — wires core listeners; `openSubtoolbar`, `registerSubtoolbar`, `openRightPanel` | **emit:** `ui:ready` | All above |
+| 7 | `pdf_core/app.js` | IIFE — wires core listeners; `openSubtoolbar`, `registerSubtoolbar` | **emit:** `ui:ready` | All above |
 | 8 | `text_tool/unified-text-box.js` | `UnifiedTextBox`, `utbState`, `spanToUnified`, `normUtbFont` | — | — |
 | 9 | `text_tool/svg-renderer.js` | `renderBox`, `renderTextLayer`, `renderAllTextLayers`, `selectBoxInSVG`, `computeXPositions` | **on:** `page:rendered` | `utbState` |
 | 10 | `text_tool/drag-resize.js` | IIFE — SVG-native drag/resize event delegation | — | `utbState`, `renderBox` |
