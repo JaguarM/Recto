@@ -135,9 +135,6 @@ function ocrAddBoxes(pageNum, img, res, pass) {
     }
 
     const set = L.set;
-    const x0 = L.entries[0].pen;
-    const last = L.entries[L.entries.length - 1];
-    const chars = ocrCharPositions(L, x0).map(cp => ({ c: cp.c, x: cp.x * sx, w: cp.w * sx }));
     const { family, bold, italic } = ocrFontFromSetName(L.font);
 
     // invert svg-renderer's computeBaseline (y + h·0.85 − 1.3) so the SVG
@@ -145,18 +142,40 @@ function ocrAddBoxes(pageNum, img, res, pass) {
     const h = (set.maxAsc + set.maxDesc) * sy;
     const y = L.baseline * sy - (h * 0.85 - 1.3);
 
-    const box = utbState.addBox(new UnifiedTextBox({
-      type: 'ocr', page: pageNum, text: L.text,
-      lineId: `ocr_p${pageNum}_l${n}`,
-      x: x0 * sx, y, w: (last.pen + last.adv - x0) * sx, h,
-      fontFamily: family, bold, italic,
-      sizePt: set.sizePx * 0.75 * sx,
-      baseCharPositions: chars,
-      color: L.clean ? null : OCR_UNCLEAN_COLOR,
-    }));
-    box.ocrSource = true;
-    box.ocr = { clean: !!L.clean, tol: pass.tol || 0, quant: !!pass.quant,
-      union: !!pass.union, font: L.font, baseline: L.baseline, fails: L.fails.length };
+    // A redaction box interrupting the line splits it into separate text
+    // boxes, each anchored at its own measured pen (the segment after a box
+    // must not ride as trailing chars of the segment before it). Same gap
+    // predicate the engine used to insert the separator space in lineEntries.
+    const rects = L.boxes ?? [];
+    const segs = [[L.entries[0]]];
+    for (let i = 1; i < L.entries.length; i++) {
+      const a = L.entries[i - 1].pen + L.entries[i - 1].adv, b = L.entries[i].pen;
+      if (rects.some(bx => bx[0] >= a - 2 && bx[1] <= b + 2)) segs.push([]);
+      segs[segs.length - 1].push(L.entries[i]);
+    }
+
+    for (const seg of segs) {
+      const first = seg[0], last = seg[seg.length - 1];
+      const txLen = ch => (ch === 'ﬁ' || ch === 'ﬂ') ? 2 : 1;   // ligatures transcribe as 2 chars
+      const startOff = first.i, endOff = last.i + txLen(last.ch);
+      const segLine = { text: L.text.slice(startOff, endOff),
+        entries: seg.map(e => ({ ...e, i: e.i - startOff })) };
+      const x0 = first.pen;
+      const chars = ocrCharPositions(segLine, x0).map(cp => ({ c: cp.c, x: cp.x * sx, w: cp.w * sx }));
+
+      const box = utbState.addBox(new UnifiedTextBox({
+        type: 'ocr', page: pageNum, text: segLine.text,
+        lineId: `ocr_p${pageNum}_l${n}`,      // segments share the line — redactions connect to it
+        x: x0 * sx, y, w: (last.pen + last.adv - x0) * sx, h,
+        fontFamily: family, bold, italic,
+        sizePt: set.sizePx * 0.75 * sx,
+        baseCharPositions: chars,
+        color: L.clean ? null : OCR_UNCLEAN_COLOR,
+      }));
+      box.ocrSource = true;
+      box.ocr = { clean: !!L.clean, tol: pass.tol || 0, quant: !!pass.quant,
+        union: !!pass.union, font: L.font, baseline: L.baseline, fails: L.fails.length };
+    }
     tally.lines++;
     if (L.clean) tally.clean++;
   }
@@ -273,6 +292,13 @@ async function ocrRun(allPages) {
   document.getElementById('ocr-run-page')?.addEventListener('click', () => ocrRun(false));
   document.getElementById('ocr-run-all')?.addEventListener('click', () => ocrRun(true));
   document.getElementById('ocr-cancel')?.addEventListener('click', () => { ocrToolState.cancel = true; });
+  // Show/hide the OCR text overlay globally — same pattern as text_tool's
+  // toggle-embedded-text (body class + data-type CSS rule in styles.css).
+  document.getElementById('ocr-toggle-text')?.addEventListener('click', () => {
+    const btn = document.getElementById('ocr-toggle-text');
+    const active = btn.classList.toggle('active');
+    document.body.classList.toggle('hide-ocr-text', !active);
+  });
 })();
 
 // New document: boxes were already reset by the core; drop page-derived state.

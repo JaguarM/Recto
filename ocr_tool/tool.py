@@ -22,5 +22,5 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=3e8cb783'},
         {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=13b12dbb'},
         # the adapter (Recto-owned)
-        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=2'},
+        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=3'},
     ]

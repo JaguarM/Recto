@@ -11,3 +11,7 @@
 #ocr-tool-bar #ocr-cancel {
   color: #f28b82;
 }
+
+/* ocr-toggle-text: hide the OCR text overlay globally (mirror of text_tool's
+   body.hide-embedded-text rule; OCR-detected redaction rects stay visible). */
+body.hide-ocr-text .utb-group[data-type="ocr"] { display: none; }
