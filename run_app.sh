@@ -25,6 +25,9 @@ echo "Starting Recto..."
 # Ensure requirements are up to date
 pip install -r requirements.txt
 
+# Create/update the local database
+python3 manage.py migrate
+
 # Launch browser in background (give the app a moment to start)
 (sleep 2 && open_browser) &
 

@@ -48,6 +48,11 @@ sudo chown -R www-data:www-data /var/www/recto
 # ... hardcoded paths.
 sudo cp recto.service /etc/systemd/system/
 
+# Production settings via a systemd drop-in, so recto.service itself stays untouched.
+# DEBUG defaults to on in settings.py for local dev; the server must turn it off.
+sudo mkdir -p /etc/systemd/system/recto.service.d
+printf '[Service]\nEnvironment="DJANGO_DEBUG=0"\n' | sudo tee /etc/systemd/system/recto.service.d/production.conf > /dev/null
+
 # Reload the systemd daemon so it sees the new file
 sudo systemctl daemon-reload
 sudo systemctl restart recto

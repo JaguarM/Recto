@@ -35,7 +35,9 @@ Double-click **`run_app.bat`** — it installs dependencies and opens the app in
 ## Install & run (Linux / macOS)
 
 ```bash
-python -m pip install -r requirements.txt
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python manage.py migrate
 python manage.py runserver 5000
 ```
 

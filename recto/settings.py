@@ -10,22 +10,34 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# Security settings — this repo is public, so nothing secret may live in this file.
+# The key comes from the DJANGO_SECRET_KEY env var when set; otherwise one is
+# generated on first start and persisted in .secret_key (gitignored).
+SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
+if not SECRET_KEY:
+    _key_file = BASE_DIR / '.secret_key'
+    if _key_file.exists():
+        SECRET_KEY = _key_file.read_text().strip()
+    else:
+        from django.core.management.utils import get_random_secret_key
+        SECRET_KEY = get_random_secret_key()
+        _key_file.write_text(SECRET_KEY)
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-k+9jn^(tjqmipokz4@3=l3&an94$mjgbm709dlad!3p090f5$*'
+# Defaults to on for local development; production must set DJANGO_DEBUG=0
+# (setup.sh installs a systemd drop-in that does this).
+DEBUG = os.environ.get('DJANGO_DEBUG', '1') != '0'
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
-
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = os.environ.get(
+    'DJANGO_ALLOWED_HOSTS',
+    'localhost,127.0.0.1,unbarpdf.com,www.unbarpdf.com',
+).split(',')
 
 CSRF_TRUSTED_ORIGINS = [
     'https://unbarpdf.com',
@@ -47,7 +59,6 @@ INSTALLED_APPS = [
 
 # Dynamic plugin discovery: scan for directories containing apps.py
 # Drop a plugin folder in to enable it, remove the folder to disable it.
-import os
 for _item in os.listdir(BASE_DIR):
     _item_path = os.path.join(BASE_DIR, _item)
     if (os.path.isdir(_item_path)
