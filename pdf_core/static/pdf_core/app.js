@@ -20,7 +20,7 @@
           } else {
             state.activeTool = 'add-box';
             els.toolAddBoxBtn.classList.add('active');
-            document.getElementById('etv-add-text-btn')?.classList.remove('active');
+            document.getElementById('tt-add-text-btn')?.classList.remove('active');
             els.viewer.style.cursor = 'crosshair';
           }
         });
@@ -127,7 +127,7 @@
            // Deselect tool after one use to avoid spam
            state.activeTool = null;
            els.viewer.style.cursor = 'default';
-           const toolBtn = document.getElementById('etv-add-text-btn');
+           const toolBtn = document.getElementById('tt-add-text-btn');
            if (toolBtn) toolBtn.classList.remove('active');
         }
       });

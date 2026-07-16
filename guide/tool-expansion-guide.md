@@ -397,9 +397,9 @@ The route is auto-discovered from `tool.url_module` — no need to edit `recto/u
 |---|---|---|---|---|
 | `text_tool` | Subtoolbar | `TextTool` | `toggle-fmt` | `fabric-options-bar` |
 | `webgl_mask` | Subtoolbar | `WebglMaskTool` | `toggle-webgl` | `webgl-options-bar` |
-| `embedded_text_viewer` | Subtoolbar | `EmbeddedTextViewerTool` | `toggle-embedded-text` | `etv-bar` |
+| `embedded_text_viewer` | Toolbar toggle only | `EmbeddedTextViewerTool` | `toggle-embedded-text` | — |
 | `extracted_text` | Logic-only | *(none)* | — | — |
-| `pdf_core` | Core (always on) | *(none)* | — | `text-options-bar` |
+| `pdf_core` | Core (always on) | *(none)* | — | `unified-options-bar-container` (bar host) |
 
 ---
 

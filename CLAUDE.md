@@ -40,8 +40,6 @@ Analysis is a second, plugin-owned pass: plugins listen for `document:loaded`, r
 
 Optional plugins are documented **only** in `guide/plugins/` — baseline code and baseline docs must never name an optional plugin (that's the contract; a mention elsewhere is a leak to fix). Optional plugins attach only through the `PDFHooks` bus and guarded globals (`typeof fn === 'function'` call sites in `text_tool`).
 
-`reference/` is dead code kept for lookup (pre-rebrand black-bar detection); it has no `apps.py` so discovery skips it. Nothing imports it.
-
 ## Coordinate contract
 
 `pdf_core/logic/geometry.py` is the single source of truth (JS mirror: `text_tool/static/text_tool/geometry.js`, `window.GEO`). Two spaces: **image pixels at 96 DPI** (canonical geometry — box x/y/w/h, SVG viewBox) and **PDF points at 72 DPI** (canonical typography — `sizePt`). Font size converts to px exactly once, at the SVG render boundary. Import the named constants; never re-derive `0.75`, `133`, `816`, etc.
@@ -53,3 +51,4 @@ Optional plugins are documented **only** in `guide/plugins/` — baseline code a
 - Toggle visibility only via the `.hidden` class (CSS transitions key on it), never `display:` directly.
 - Subtoolbar plugins register their toggle with `window.registerSubtoolbar(btn)` and open/close via `window.openSubtoolbar(bar, btn)` — one options bar visible at a time. Right-panel plugins are fully self-owned: the plugin's `sidebar` template supplies its own container element, the plugin ships its own CSS and toggle wiring, and the core hosts no right panel — there is no core touchpoint.
 - `PDFTool` class attributes use tuples for sequence defaults (mutable-default trap); subclasses may assign lists.
+- `guide/ui-map.md` maps every visible control (label/tooltip → owning plugin → template → handler script). Update it in the same change whenever a control is added, moved, renamed, or removed.

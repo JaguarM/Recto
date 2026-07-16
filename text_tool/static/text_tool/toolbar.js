@@ -347,8 +347,8 @@
   // The actual placement is handled by the viewer mousedown listener in app.js
   // (state.activeTool === 'text' → addEmbeddedTextSpan). Core no longer wires
   // this plugin-owned button, so the toggle lives here.
-  el('etv-add-text-btn')?.addEventListener('click', () => {
-    const btn = el('etv-add-text-btn');
+  el('tt-add-text-btn')?.addEventListener('click', () => {
+    const btn = el('tt-add-text-btn');
     if (state.activeTool === 'text') {
       state.activeTool = null;
       btn.classList.remove('active');
