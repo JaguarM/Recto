@@ -42,11 +42,31 @@ anything to work on.
 |---|---|---|---|
 | `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar | *(none — fully client-side)* |
 
+## Redaction refiner
+
+Redraws detected redaction bars to the true hidden-word extent by reading the
+words that surround each bar: punctuation on a neighbour abuts with no space, so
+that edge is redrawn flush; otherwise the edge is redrawn one space-width in from
+where the neighbour word begins (the space sized from that word's own font). No
+UI — it runs on the generic `redactions:connected` PDFHooks event that
+`embedded_text_viewer` emits after snapping redactions to lines.
+
+| Plugin | Docs | What it does | Routes |
+|---|---|---|---|
+| `redaction_refiner` | [redaction-refiner/](redaction-refiner/) | Redraws redaction bars to the hidden-word extent via surrounding words + punctuation | *(none — fully client-side)* |
+
+- **Attaches through the `redactions:connected` hook and guarded globals** (`renderBox`,
+  `calculateAllWidths`, `getNaturalSpaceWidth`, `GEO`) — never imports.
+- **Needs `redaction` boxes and surrounding text** (an `embedded_text_viewer` or
+  `ocr_tool` line). With neither it no-ops. The hook emission is generic and names no
+  plugin, so it stays put — emitting into the void — if the refiner is removed.
+
 ## Dependency order
 
 ```
 redaction_matching ──runtime globals──> text_tool ──> pdf_core
 ocr_tool           ──runtime globals──> text_tool ──> pdf_core
+redaction_refiner  ──'redactions:connected'──> embedded_text_viewer ──> pdf_core
 ```
 
 - **`redaction_matching` attaches to `text_tool` through guarded globals**, not imports. See

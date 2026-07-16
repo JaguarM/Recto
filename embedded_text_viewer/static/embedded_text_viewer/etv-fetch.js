@@ -105,6 +105,9 @@ async function utbFetchSpans(file) {
 
 
 // ── Connect redaction boxes to embedded text lines ────────────
+// Emits the generic 'redactions:connected' PDFHooks event when done (see the
+// tail of the function) so line-aware consumers can react on both the span-load
+// path and after an OCR pass.
 
 function utbConnectRedactionsToLines() {
   // OCR-read lines are text lines too — a redaction connects to whichever
@@ -155,6 +158,12 @@ function utbConnectRedactionsToLines() {
 
     renderBox(rb);
   });
+
+  // Announce that redactions are now line-associated. Generic lifecycle event
+  // (names no plugin); listeners such as a redaction refiner react to it on both
+  // the span-load path and after an OCR pass. Fire-and-forget — a slow/async
+  // subscriber must not block line connection.
+  window.PDFHooks?.emit('redactions:connected');
 }
 
 

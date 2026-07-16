@@ -48,6 +48,8 @@
       <button id="fabric-underline"     class="icon-button options-toggle" title="Underline"><u style="font-family:serif;">U</u></button>
       <button id="fabric-strikethrough" class="icon-button options-toggle" title="Strikethrough"><s style="font-family:serif;">S</s></button>
       <input type="color" id="fabric-color" value="#000000" title="Text color" style="margin-left: 4px;">
+      <label class="checkbox-lbl" style="margin-left: 6px;" title="Apply the font's native kerning to this text">
+        <input type="checkbox" id="kerning"> Kerning</label>
       <span class="options-divider options-divider--inline"></span>
       <button id="fabric-nudge-mode" class="icon-button options-toggle" title="Nudge characters (micro-typography)">
         <span class="material-symbols-outlined" style="font-size: 18px;">width</span>
@@ -84,8 +86,9 @@
 
   <!-- Match group — tuning that drives width matching against a detected bar.
        Revealed only while a redaction box is selected (see syncToolbarToBox in
-       toolbar.js). The #tolerance / #kerning / #force-uppercase IDs are read by
-       whichever matching plugin is installed; they are inert when none is. -->
+       toolbar.js). The #tolerance / #force-uppercase IDs are read by whichever
+       matching plugin is installed; they are inert when none is. (Kerning is a
+       general text property and lives in the Style group above.) -->
   <div class="options-divider hidden" id="fabric-match-divider"></div>
 
   <div class="options-group hidden" id="fabric-match-group">
@@ -95,7 +98,6 @@
              style="width: 44px; text-align: center;">
       <span class="options-label">px</span>
       <span class="options-divider options-divider--inline"></span>
-      <label class="checkbox-lbl"><input type="checkbox" id="kerning"> Kerning</label>
       <label class="checkbox-lbl"><input type="checkbox" id="force-uppercase"> Uppercase</label>
     </div>
     <div class="options-group-header">Match</div>
