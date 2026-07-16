@@ -415,6 +415,44 @@
     return bands;
   }
 
+  // ---- anchor-column candidate index (see tools/blind-read.mjs) ----
+  // Candidates grouped ("sorted") by the ink-row bit pattern of their first
+  // two ink columns (64-bit masks over the band window's rows, bit =
+  // dy+row+maxAsc). A candidate is provably dead when the page is white at a
+  // pixel it predicts as ink, so one AND per group replaces the per-candidate
+  // pixel walk wherever the group needs ink the page doesn't have. Near-white
+  // predictions (pred > 254−2·TOL) prove nothing from a white page and stay
+  // out of the masks; the page-side mask counts skip pixels as ink.
+  function anchorGroups(set, phy, quant, TOL) {
+    const cands = set.byPhy.get(phy) ?? [];
+    const ASC = set.maxAsc, span = ASC + set.maxDesc;
+    if (span > 64) return null;                      // mask would overflow: plain path
+    cands.forEach((g, i) => { g._i = i; });
+    const colBits = (g, colRel) => {                 // required-ink row mask of one glyph column
+      let m0 = 0, m1 = 0;
+      for (let k = 0; k < g.inkC.length; k++) {
+        if (g.inkC[k] !== g.inkLeft + colRel) continue;
+        const pred = quant ? quant[g.inkB[k]] : g.inkB[k];   // fresh-canvas prediction (lin: pred = gb)
+        if (pred > 254 - 2 * TOL) continue;
+        const bit = g.dy + g.inkR[k] + ASC;
+        if (bit >= 0 && bit < span) { if (bit < 32) m0 |= 1 << bit; else m1 |= 1 << (bit - 32); }
+      }
+      return [m0, m1];
+    };
+    const groups = new Map();
+    for (const g of cands) {
+      const [m0, m1] = colBits(g, 0), [n0, n1] = colBits(g, 1);
+      let grp = groups.get(m0 + ',' + m1);
+      if (!grp) groups.set(m0 + ',' + m1, grp = { m0, m1, subs: new Map() });
+      let sub = grp.subs.get(n0 + ',' + n1);
+      if (!sub) grp.subs.set(n0 + ',' + n1, sub = { n0, n1, members: [] });
+      sub.members.push(g);
+    }
+    const list = [...groups.values()];
+    for (const grp of list) grp.subs = [...grp.subs.values()];
+    return list;
+  }
+
   // ---- the scanner (see tools/blind-read.mjs for the full derivation) ----
   // TOL relaxes byte-exactness to |Δ|≤TOL per glyph-ink pixel (2×TOL on
   // composite pixels, where two curves' rasterizer deviations compound) — for
@@ -483,6 +521,27 @@
       return -1;
     };
 
+    // anchor-column group index (see anchorGroups above); cache per (set,
+    // phy) — quant maps are per page, so the cache re-keys on the map object
+    let gc = set._grpCache;
+    if (!gc || gc.quant !== QUANT || gc.tol !== TOL)
+      gc = set._grpCache = { quant: QUANT, tol: TOL, byPhy: new Map() };
+    let groups = gc.byPhy.get(phy);
+    if (groups === undefined) { groups = anchorGroups(set, phy, QUANT, TOL); gc.byPhy.set(phy, groups); }
+    const grpList = groups ??
+      (cands.forEach((g, i) => { g._i = i; }),
+        cands.length ? [{ m0: 0, m1: 0, subs: [{ n0: 0, n1: 0, members: cands }] }] : []);
+    const ASC = set.maxAsc, baseTop = baseline - ASC;  // unclamped window top: mask bit = y - baseTop
+    let pm0 = 0, pm1 = 0;                              // page-side mask of the last colMask(x)
+    const colMask = (x) => {
+      pm0 = 0; pm1 = 0;
+      for (let y = y0; y < y1; y++)
+        if (page.gray[y * W + x] < 255 || skip[(y - y0) * bw + (x - xFrom)]) {
+          const bit = y - baseTop;
+          if (bit < 32) pm0 |= 1 << bit; else if (bit < 64) pm1 |= 1 << (bit - 32);
+        }
+    };
+
     const glyphs = [], fails = [], frags = [], records = [];
     let failGuard = -1;                   // right edge of the last failed blob
     const accepted = new Set();
@@ -492,7 +551,16 @@
       if (col < 0) break;
       let best = null;
       for (let back = 0; back <= 2 && !best; back++) {
-        for (const g of cands) {
+        if (col - back < xFrom) break;               // every candidate's bbox starts left of the window
+        colMask(col - back);                         // page ink+skip rows at the anchor column
+        const a0 = pm0, a1 = pm1;
+        let b0 = -1, b1 = -1;                        // second column; all-ones when outside the window
+        if (col - back + 1 < xTo) { colMask(col - back + 1); b0 = pm0; b1 = pm1; }
+        for (const grp of grpList) {
+        if ((grp.m0 & ~a0) | (grp.m1 & ~a1)) continue;   // group needs ink where the page is white
+        for (const sub of grp.subs) {
+        if ((sub.n0 & ~b0) | (sub.n1 & ~b1)) continue;
+        for (const g of sub.members) {
           const pi = col - back - g.dx - g.inkLeft;
           const gx = pi + g.dx, gy = baseline + g.dy;
           if (gx < xFrom || gx + g.w > xTo || gy < y0 || gy + g.h > y1) continue;
@@ -545,7 +613,12 @@
               exact < considered * 0.5 || pending > considered * 0.35) continue;
           if (accepted.has(g.ch + '@' + (pi + g.phx))) continue;  // after pixel work: rare
           const score = exact - pending * 0.25;
-          if (!best || score > best.score) best = { g, pi, gx, gy, exact, pending, score };
+          // tie-break on original candidate order: acceptance must not
+          // depend on the group iteration order (plain loop = first max)
+          if (!best || score > best.score || (score === best.score && g._i < best.g._i))
+            best = { g, pi, gx, gy, exact, pending, score };
+        }
+        }
         }
       }
       if (!best) {
@@ -729,17 +802,27 @@
   // between bands; the read yields to the event loop so the UI stays alive.
   async function readPage(page, sets, opts) {
     const tol = opts?.tol || 0;
+    // opts.carry = cross-page layout hints for sequential whole-document
+    // reads (see tools/blind-read.mjs): certified picks keyed by BASELINE y,
+    // plus the last (set, phy) and the built union pools, carried page to
+    // page. Callers scope one carry per (document, pass config) — mixing
+    // pass configs would smuggle e.g. a union pool into a stricter pass.
+    const carry = opts?.carry;
     // union pools group by PIXEL SIZE, not into one global pool: fonts mixed
     // within a line (bold label + regular value) share their size, while a
     // global pool lets a foreign-size font byte-match glyph fragments and
     // steal pixels (a times sliver ate courier 'e's — measured on courier_1)
     if (opts?.union && sets.length > 1) {
-      const bySize = new Map();
-      for (const s of sets) {
-        if (!bySize.has(s.sizePx)) bySize.set(s.sizePx, []);
-        bySize.get(s.sizePx).push(s);
+      if (carry?.usets) sets = carry.usets;
+      else {
+        const bySize = new Map();
+        for (const s of sets) {
+          if (!bySize.has(s.sizePx)) bySize.set(s.sizePx, []);
+          bySize.get(s.sizePx).push(s);
+        }
+        sets = [...bySize.values()].map(g => g.length > 1 ? unionSets(g) : g[0]);
+        if (carry) carry.usets = sets;
       }
-      sets = [...bySize.values()].map(g => g.length > 1 ? unionSets(g) : g[0]);
     }
     const quant = opts?.quant ? quantMap(page) : null;
     const q = quant ? v => quant[v] : v => v;
@@ -760,7 +843,9 @@
     // as their own blank-row-separated band, though the line's scan (which
     // spans baseline+maxDesc) read and reported them — such a band is not a □
     const explained = new Uint8Array(page.w * page.h);
-    let n = 0, last = null;                 // previous band's winning (set, phy)
+    // previous band's winning (set, phy) — carried ACROSS pages: a
+    // document's font rarely changes at a page break, the fast path verifies
+    let n = 0, last = carry?.last ?? null;
     for (const [top, bot] of bands) {
       if (++n % 6 === 0) {
         opts?.progress?.(n, bands.length);
@@ -798,7 +883,26 @@
       // previous band's winner first and accept it when its probe fully reads;
       // fall back to the full sweep otherwise (font/style changes, headings)
       let pick = null;
-      if (last) {
+      // cross-page layout hint: repeating documents lay page n out on page
+      // n−1's BASELINE grid (band tops/bottoms shift with ascender/descender
+      // content, baselines don't), so earlier pages' picks whose baseline
+      // falls in this band's range are each tried as a single probe.
+      // Accepted only when the probe fully reads — a stale hint costs one
+      // probe and certification never rests on the assumption (a cached
+      // measurement, not a layout constant: every acceptance is still
+      // byte-proven on THIS page).
+      if (carry?.picks)
+        for (const [yb, hint] of carry.picks) {
+          if (pick) break;
+          if (hint.below ? (yb <= bot || yb > bot + hint.set.maxAsc)
+                         : (yb <= top || yb > bot)) continue;
+          const probe = scanLine(page, mask, hint.set, hint.phy, yb,
+            Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top);
+          if (probe.glyphs.length >= 3 && probe.fails.length === 0)
+            pick = { set: hint.set, phy: hint.phy, yb, below: hint.below,
+              score: probe.glyphs.reduce((s, g) => s + g.exact, 0) };
+        }
+      if (!pick && last) {
         for (let yb = bot; yb >= bot - last.set.maxDesc && yb > top && !pick; yb--) {
           const probe = scanLine(page, mask, last.set, last.phy, yb,
             Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top);
@@ -899,8 +1003,12 @@
         L.struck = strikes.map(sb => [sb.x0, sb.x1]);
       }
       L.clean = L.fails.length === 0 && L.residual === 0;
+      // remember this baseline's certified pick for the next page's hint
+      if (carry) (carry.picks ??= new Map()).set(pick.yb,
+        { set: pick.set, phy: pick.phy, below: pick.below });
       lines.push(L);
     }
+    if (carry) carry.last = last;
     // an unread band may be explained by a line BELOW it (an 'i' dot separated
     // from its stem by a blank row precedes its own line's band): re-check
     // against the final explained map before calling it a □
@@ -942,17 +1050,25 @@
   }
 
   // Run the ladder on one page: { res, pass } — the fewest-failures read at
-  // the earliest pass. opts: { passHint, progress(pass, done, total) }. A
-  // document's producer doesn't change page to page — pass the previous
-  // page's winning pass back in as passHint to try it first.
+  // the earliest pass. opts: { passHint, carry, progress(pass, done, total) }.
+  // A document's producer doesn't change page to page — pass the previous
+  // page's winning pass back in as passHint to try it first. opts.carry is a
+  // caller-owned per-DOCUMENT object for sequential whole-document reads
+  // (cross-page baseline hints); it is scoped per pass config here so a
+  // hint can never carry one pass's machinery (a union pool, a palette
+  // read) into a stricter pass and weaken its certificate label.
   async function readPageAuto(page, sets, opts) {
     const key = p => `${p.tol}|${p.quant ? 1 : 0}|${p.union ? 1 : 0}`;
     const hint = opts?.passHint;
     const passes = hint ? [hint, ...blindPasses.filter(p => key(p) !== key(hint))] : blindPasses;
+    const doc = opts?.carry;
+    if (doc) doc.passes ??= new Map();
     let best = null;
     for (const pass of passes) {
+      let carry = doc?.passes.get(key(pass));
+      if (doc && !carry) doc.passes.set(key(pass), carry = {});
       const r = await readPage(page, sets, { tol: pass.tol,
-        quant: pass.quant, union: pass.union,
+        quant: pass.quant, union: pass.union, carry,
         progress: opts?.progress && ((d, t) => opts.progress(pass, d, t)) });
       const fails = r.lines.reduce((s, L) => s + L.fails.length, 0) +
         r.lines.filter(L => !L.set && !L.fragOnly).length;

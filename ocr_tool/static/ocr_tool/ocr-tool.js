@@ -195,7 +195,7 @@ function ocrAddBoxes(pageNum, img, res, pass) {
   return tally;
 }
 
-async function ocrReadOnePage(pageNum, label) {
+async function ocrReadOnePage(pageNum, label, carry) {
   const img = await ocrLoadPageImage(pageNum);
   if (!img) return null;
   ocrToolState.engine ??= new PageEngine();
@@ -204,6 +204,7 @@ async function ocrReadOnePage(pageNum, label) {
   const sets = await ocrLoadSets();
   const { res, pass } = await BlindOCR.readPageAuto(page, sets, {
     passHint: ocrToolState.passHint,
+    carry,      // Read-all-pages only: cross-page baseline hints (per run)
     progress: (p, d, t) => setOcrStatus(`${label}${BlindOCR.passLabel(p)}: ${d}/${t} bands…`),
   });
   ocrToolState.passHint = pass;
@@ -234,11 +235,14 @@ async function ocrRun(allPages) {
       ? Array.from({ length: state.numPages }, (_, i) => i + 1)
       : [state.currentPage];
     const totals = { lines: 0, clean: 0, unread: 0, boxes: 0 };
+    // sequential whole-document read: pages share one hint carry (same as
+    // char_training's blindOcrDocument); single-page reads stay stateless
+    const carry = allPages ? {} : null;
     let lastPass = null, fonts = new Set();
     for (const p of nums) {
       if (ocrToolState.cancel) break;
       const label = allPages ? `OCR ${p}/${state.numPages}` : `OCR p${p}`;
-      const out = await ocrReadOnePage(p, label);
+      const out = await ocrReadOnePage(p, label, carry);
       if (!out) continue;
       ocrClearPage(p);
       const t = ocrAddBoxes(p, out.img, out.res, out.pass);
