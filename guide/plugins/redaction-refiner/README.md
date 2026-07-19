@@ -7,9 +7,18 @@ automatically whenever redactions are (re)connected to their text lines.
 ## What it does
 
 For every `redaction` box it finds the embedded/OCR word immediately **left** and
-**right** of the box on the same text line (the same surrounding-word lookup the
-uppercase heuristic in `embedded_text_viewer`'s `utbConnectRedactionsToLines`
-uses), then rebuilds each edge:
+**right** of the box on the same text line, then rebuilds each edge.
+
+When OCR has read the row, its words are used **in preference to** the embedded
+ones: OCR reads the glyphs actually *visible* on the page after redaction,
+whereas the embedded text layer can still carry glyphs the redaction removed from
+view. A following word like `and` whose leading `a` was dropped from the text
+layer survives there as `nd` at the `n`'s position — about one glyph to the right
+of where the word visibly begins — and measuring the box edge against that
+clipped neighbour would push the edge past the real word start and widen the bar
+(by the width of the hidden `a`). OCR's `and` sits at the true visible start, so
+it gives the correct extent. With no OCR on the row it falls back to the embedded
+spans on the box's line (the same lookup `embedded_text_viewer` snaps to). Then:
 
 - Look at the character on the neighbour word that **faces the box** — its last
   character on the left, its first character on the right.
