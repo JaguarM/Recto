@@ -105,19 +105,20 @@ async function initWebGLOverlay(canvas, pageNum) {
           uniform sampler2D uMask;
           uniform float uStrength;
           void main() {
-            float page = texture2D(uPage, vTexCoord).r;
+            vec3 page = texture2D(uPage, vTexCoord).rgb;
             float mask = texture2D(uMask, vTexCoord).r;
             float alpha = mask * uStrength;
-            float result;
+            vec3 result;
             if (mask > 0.999) {
               // Fully redacted interior (mask == 1.0): page ≈ 0 so division recovers nothing.
               // Original content is unrecoverable — just show white.
-              result = uStrength;
+              result = vec3(uStrength);
             } else {
-              // Anti-aliased border or clear pixel: invert the alpha blend multiplicatively.
+              // Anti-aliased border or clear pixel: invert the alpha blend
+              // multiplicatively, per channel — the page stays in color.
               result = min(page / max(1.0 - alpha, 0.001), 1.0);
             }
-            gl_FragColor = vec4(vec3(result), 1.0);
+            gl_FragColor = vec4(result, 1.0);
           }
         `;
 
@@ -155,7 +156,10 @@ async function initWebGLOverlay(canvas, pageNum) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.LUMINANCE, gl.LUMINANCE, gl.UNSIGNED_BYTE, pageImg);
+        // RGBA, not LUMINANCE: the page raster is color (letterhead art,
+        // hyperlink blue) and the overlay must not desaturate the view —
+        // only the MASK below is inherently single-channel.
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, pageImg);
 
         const maskTexture = gl.createTexture();
         gl.activeTexture(gl.TEXTURE1);
