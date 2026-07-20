@@ -7,6 +7,25 @@ editable `type: 'ocr'` box — the same pipeline `embedded_text_viewer` feeds
 embedded spans through — and detected redaction rectangles land as
 `type: 'redaction'` boxes.
 
+## Auto read + layer choice
+
+Every loaded document is read automatically (`document:loaded` → all pages,
+fire-and-forget). When the run settles the adapter compares non-whitespace
+character counts of the `ocr` and `embedded` layers and shows exactly one:
+
+- OCR volume within 80% of the embedded layer (`OCR_AUTO_SIMILARITY`), or no
+  embedded text at all (scanned pages) → **OCR layer shown**, embedded hidden
+  (the reader's measured ¼-px pens beat PDF extraction).
+- OCR read substantially less → embedded stays, the OCR overlay is hidden so
+  the two layers never draw on top of each other.
+
+The choice just flips the existing body classes (`hide-ocr-text` /
+`hide-embedded-text`) **and** both toolbar toggle buttons' active state, so
+manual toggling afterwards starts from a state that matches the screen; the
+verdict is appended to the status line. Loading a new document mid-run
+cancels the old run before the new auto read starts. Manual runs never flip
+layers.
+
 This matters for scanned/eDiscovery documents: their pages are images, so the
 embedded-text extractor has nothing to read. The blind reader recovers the
 text from the pixels — *certified, not guessed*: a line is byte-clean only

@@ -18,6 +18,8 @@ const ocrToolState = {
   running: false,
   cancel: false,
   passHint: null,   // winning pass of the previous page (producer is stable)
+  autoSeq: 0,       // auto-read generation — a new document supersedes the old cycle
+  autoDone: false,  // true once the auto read + layer choice for this document settled
 };
 
 const OCR_GLYPHS_BASE = '/static/ocr_tool/glyphs/';
@@ -277,6 +279,64 @@ async function ocrRun(allPages) {
   }
 }
 
+// ── Auto OCR on load + layer choice ───────────────────────────
+// Every loaded document is read automatically (all pages, fire-and-forget so
+// loadDocument is not blocked). Afterwards the display shows exactly one text
+// layer: when the OCR volume is similar to the embedded layer's — or the
+// document has no embedded text at all (scanned pages) — the OCR layer wins
+// (its per-glyph measured pens beat PDF extraction); otherwise the OCR
+// overlay is hidden so the two layers never draw on top of each other.
+
+const OCR_AUTO_SIMILARITY = 0.8;  // min/max non-whitespace char ratio = "similar"
+
+// Non-whitespace characters currently held by one box type ('□' markers and
+// OCR-detected redaction rects carry no text, so they never count).
+function ocrTextAmount(type) {
+  let n = 0;
+  for (const b of utbState.boxes)
+    if (b.type === type && !b.ocr?.unread) n += (b.text || '').replace(/\s+/g, '').length;
+  return n;
+}
+
+// Flip both overlays + their toolbar toggle buttons in one move, so a later
+// manual click on either toggle starts from a state that matches the screen.
+function ocrShowOcrLayer(showOcr) {
+  document.body.classList.toggle('hide-ocr-text', !showOcr);
+  document.body.classList.toggle('hide-embedded-text', showOcr);
+  document.getElementById('ocr-toggle-text')?.classList.toggle('active', showOcr);
+  document.getElementById('toggle-embedded-text')?.classList.toggle('active', !showOcr);
+}
+
+function ocrChooseLayer() {
+  const ocr = ocrTextAmount('ocr'), emb = ocrTextAmount('embedded');
+  if (!ocr) return;                       // nothing read — leave the display alone
+  const ratio = emb ? Math.min(ocr, emb) / Math.max(ocr, emb) : 1;
+  const showOcr = ratio >= OCR_AUTO_SIMILARITY;
+  ocrShowOcrLayer(showOcr);
+  const status = document.getElementById('ocr-status')?.textContent || '';
+  setOcrStatus(status + (showOcr
+    ? (emb ? ` · showing OCR (${Math.round(ratio * 100)}% of embedded text)` : ' · showing OCR (no embedded text)')
+    : ` · embedded text kept (OCR read only ${Math.round(ratio * 100)}%)`));
+}
+
+async function ocrAutoRead() {
+  const seq = ++ocrToolState.autoSeq;
+  const live = () => seq === ocrToolState.autoSeq;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  // let a cancelled run on the previous document drain before starting
+  while (ocrToolState.running) { await sleep(150); if (!live()) return; }
+  await ocrRun(true);
+  // still running here = ocrRun bounced off a manual run that won the race
+  if (!live() || ocrToolState.running || ocrToolState.cancel) return;
+  // the embedded span fetch races the (much slower) OCR run — normally it
+  // finished long ago, but give a slow backend a moment before comparing
+  const deadline = Date.now() + 5000;
+  while (typeof _utbFetchState !== 'undefined' && !_utbFetchState.fetched &&
+         Date.now() < deadline) { await sleep(150); if (!live()) return; }
+  ocrChooseLayer();
+  ocrToolState.autoDone = true;
+}
+
 // ── Wiring ────────────────────────────────────────────────────
 // At module scope, NOT in a 'ui:ready' handler: the core emits 'ui:ready'
 // before scripts_after_app parse and the hook bus does not replay, so a
@@ -305,13 +365,16 @@ async function ocrRun(allPages) {
   });
 })();
 
-// New document: boxes were already reset by the core; drop page-derived state.
+// New document: boxes were already reset by the core; drop page-derived state,
+// abandon any run still working on the old document, and start the auto read.
 PDFHooks.on('document:loaded', () => {
   ocrToolState.passHint = null;
   ocrToolState.engine = null;
-  ocrToolState.cancel = false;
+  ocrToolState.cancel = ocrToolState.running;
+  ocrToolState.autoDone = false;
   setOcrStatus('idle');
+  ocrAutoRead();
 });
 
 // Programmatic entry point (used by the headless smoke test).
-window.OCRTool = { run: ocrRun, state: ocrToolState };
+window.OCRTool = { run: ocrRun, autoRead: ocrAutoRead, chooseLayer: ocrChooseLayer, state: ocrToolState };
