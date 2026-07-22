@@ -37,7 +37,10 @@ text, decodes them in the browser, sniffs the file type from the magic bytes (PD
 PNG, JPEG, GIF, WebP, ZIP, plain text), and offers each block as a download or an
 in-browser view (new tab). It reads exactly one unified-text-box layer — whichever
 of OCR / embedded is visible on screen — so duplicate layers never interleave and
-corrupt a block.
+corrupt a block. After a document loads it waits for the text layer to settle (the
+`ocr_tool` state read through a guarded global, else a stability poll), scans, and —
+if attachments were found and no subtoolbar is open — opens its own bar ready for
+download/view.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
