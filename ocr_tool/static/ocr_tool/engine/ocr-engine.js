@@ -95,14 +95,70 @@
     const vcols = [];                                     // vertical dark runs + light rules
     const vdS = new Int32Array(w).fill(-1), vdGap = new Int32Array(w);
     const vlS = new Int32Array(w).fill(-1), vlMn = new Int32Array(w), vlMx = new Int32Array(w);
+    // ---- white-word fast path ----
+    // A white pixel's effect on every machine is fixed: the row machines are
+    // all quiescent (-1) after at most two whites (dark bridges one gap; light
+    // and short close on the first), and a white pixel changes a COLUMN
+    // machine only if that column has an open run. So: view the page 4 bytes
+    // at a time; when a word is 0xFFFFFFFF and the row machines are idle, the
+    // only work left is closing open column runs — tracked in a bitset, so
+    // idle columns (margins: most of the page) cost one bit test. Runs close
+    // at the same (x,y) as the per-pixel code, so rows/shortRuns/vcols come
+    // out identical (a shortRun can only ever close per-pixel: sS open means
+    // the word wasn't all-white, and the first white after it is per-pixel).
+    const len = w * h;
+    let wsrc = gray;
+    if (gray.byteOffset & 3) { wsrc = new Uint8Array((len + 3) & ~3); wsrc.set(gray); }
+    const words = new Uint32Array(wsrc.buffer, wsrc.byteOffset, len >> 2);
+    const colAct = new Uint32Array((w + 31) >> 5);        // superset of columns with open runs
+    // raw ink runs (gray<255, no mask knowledge yet), harvested by THIS scan
+    // so the dust pass below never rereads the page. Flat typed arrays, grown
+    // by doubling: [aX0,aX1] inclusive, row aY, run min byte aMin.
+    let aCap = 4096, nRaw = 0;
+    let aX0 = new Int32Array(aCap), aX1 = new Int32Array(aCap),
+      aY = new Int32Array(aCap), aMin = new Int32Array(aCap);
+    const aGrow = () => { aCap *= 2;
+      const g2 = (a) => { const b = new Int32Array(aCap); b.set(a); return b; };
+      aX0 = g2(aX0); aX1 = g2(aX1); aY = g2(aY); aMin = g2(aMin); };
+    const whiteCol = (x, y) => {                          // one white pixel, column machines only
+      if (vdS[x] >= 0 && ++vdGap[x] > 1) {
+        if (y - vdGap[x] + 1 - vdS[x] >= 40) vcols.push({ x, y0: vdS[x], y1: y - vdGap[x] + 1 });
+        vdS[x] = -1; vdGap[x] = 0;
+      }
+      if (vlS[x] >= 0) {
+        if (y - vlS[x] >= 40) vcols.push({ x, y0: vlS[x], y1: y });
+        vlS[x] = -1;
+      }
+      if (vdS[x] < 0 && vlS[x] < 0) colAct[x >> 5] &= ~(1 << (x & 31));
+    };
     for (let y = 0; y <= h; y++) {                        // y == h: column sentinel row
       const off = y * w, rowLive = y < h;
       let dS = -1, dGap = 0;                              // dark row run (≤1px gaps bridged)
       let lS = -1, lMn = 0, lMx = 0;                      // light near-constant row run
       let sS = -1;                                        // short dark run (strict)
+      let aO = -1, aMn = 255;                             // raw ink run (any v<255)
       for (let x = 0; x <= w; x++) {                      // x == w: row sentinel column
+        if (rowLive && dS < 0 && lS < 0 && sS < 0 && ((off + x) & 3) === 0) {
+          while (x + 4 <= w && words[(off + x) >> 2] === 0xFFFFFFFF) {
+            if (colAct[x >> 5] | (colAct[(x + 3) >> 5])) {
+              for (let k = 0; k < 4; k++) {
+                const xx = x + k;
+                if (colAct[xx >> 5] & (1 << (xx & 31))) whiteCol(xx, y);
+              }
+            }
+            x += 4;
+          }
+        }
         const v = rowLive && x < w ? gray[off + x] : 255;
         if (rowLive) {
+          // raw ink run (closes on the FIRST white — before the fast path can
+          // engage, so a skipped span never hides an open run)
+          if (v < 255) { if (aO < 0) { aO = x; aMn = v; } else if (v < aMn) aMn = v; }
+          else if (aO >= 0) {
+            if (nRaw === aCap) aGrow();
+            aX0[nRaw] = aO; aX1[nRaw] = x - 1; aY[nRaw] = y; aMin[nRaw] = aMn; nRaw++;
+            aO = -1;
+          }
           const dark = x < w && v < 160;
           if (dark) { if (dS < 0) dS = x; dGap = 0; }
           else if (dS >= 0 && ++dGap > 1) {
@@ -127,6 +183,7 @@
           }
         }
         if (x < w) {                                      // column state machines
+          if (v < 255) colAct[x >> 5] |= 1 << (x & 31);   // may open a run: track for fast path
           const vdark = rowLive && v < 160;
           if (vdark) { if (vdS[x] < 0) vdS[x] = y; vdGap[x] = 0; }
           else if (vdS[x] >= 0 && ++vdGap[x] > 1) {
@@ -285,6 +342,8 @@
     // rows are a legitimate glyph∩rule composite zone (link rows regressed
     // when rules went adaptive).
     const mask = new Uint8Array(w * h);
+    const rowIvs = new Array(h);           // per-row masked x-intervals [x0,x1) — lets the
+                                           // dust pass split raw runs without reading mask bytes
     const mRows = new Uint8Array(h);       // per-row "mask has cells here" flag —
     for (const o of objects) {             // lets scanLine's window init skip rows
       o.type = o.vr ? 'vrule' : o.y1 - o.y0 <= 4 ? 'rule' : 'box';
@@ -299,72 +358,172 @@
         : Math.min(h, o.y1 + 2);
       for (let y = y0; y < y1; y++) {
         mRows[y] = 1;
+        (rowIvs[y] ??= []).push([x0, x1]);
         for (let x = x0; x < x1; x++)
           mask[y * w + x] = 1;
       }
     }
     // ---- dust & ghost masking (see comment above the mask builder) ----
     {
-      const seen = new Uint8Array(w * h);
-      const stack = [];
+      // Connected components (8-conn, over gray<255 && !mask) via row runs +
+      // union-find — replaces the per-pixel DFS flood (9 neighbour checks per
+      // ink pixel, formerly the single most expensive loop in this function).
+      // Semantics are identical: same components, same n/minv/bbox, and every
+      // downstream consumer (transitive keep, swarm grouping) is a
+      // fixpoint/partition — component order provably cannot change the
+      // outcome. Runs come from the fused scan's raw harvest, split where the
+      // object mask covers them (rowIvs mirrors the mask bytes exactly — the
+      // mask has no other writers before this point), so this pass reads NO
+      // page bytes except to recompute the min byte of a piece the mask
+      // truncated (the cut part may have held the min).
       const bigs = [], smalls = [];
-      for (let i = 0; i < w * h; i++) {
-        if (gray[i] === 255 || mask[i] || seen[i]) continue;
-        seen[i] = 1; stack.push(i);
-        let n = 0, minv = 255, x0 = w, x1 = 0, y0 = h, y1 = 0;
-        const px = [];
-        while (stack.length) {
-          const j = stack.pop(), jx = j % w, jy = (j / w) | 0;
-          n++; px.push(j);
-          if (gray[j] < minv) minv = gray[j];
-          if (jx < x0) x0 = jx; if (jx > x1) x1 = jx;
-          if (jy < y0) y0 = jy; if (jy > y1) y1 = jy;
-          for (let dy = -1; dy <= 1; dy++)
-            for (let dx = -1; dx <= 1; dx++) {
-              const nx = jx + dx, ny = jy + dy;
-              if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-              const k = ny * w + nx;
-              if (!seen[k] && gray[k] < 255 && !mask[k]) { seen[k] = 1; stack.push(k); }
-            }
+      let cap = 4096, nRuns = 0;
+      let rX0 = new Int32Array(cap), rX1 = new Int32Array(cap), rY = new Int32Array(cap),
+        rPar = new Int32Array(cap), rMin = new Int32Array(cap);
+      const grow = () => { cap *= 2;
+        const g2 = (a) => { const b = new Int32Array(cap); b.set(a); return b; };
+        rX0 = g2(rX0); rX1 = g2(rX1); rY = g2(rY); rPar = g2(rPar); rMin = g2(rMin); };
+      const find = (a) => { let r = a; while (rPar[r] !== r) r = rPar[r];
+        while (rPar[a] !== r) { const nx = rPar[a]; rPar[a] = r; a = nx; } return r; };
+      let ps = 0, pe = 0, cs = 0, curY = -2;              // prev-row run window
+      const emit = (x0, x1, y, minv) => {
+        if (nRuns === cap) grow();
+        const id = nRuns++;
+        if (y !== curY) {
+          if (y === curY + 1) { ps = cs; pe = id; } else { ps = pe = id; }
+          cs = id; curY = y;
         }
-        if (minv >= 244) { for (const j of px) { mask[j] = 1; mRows[(j / w) | 0] = 1; } } // ghost
-        else if (n > 12) bigs.push([x0, x1, y0, y1]);
-        else if (x1 - x0 < 4 && y1 - y0 < 4) smalls.push({ x0, x1, y0, y1, minv, px });
+        rX0[id] = x0; rX1[id] = x1; rY[id] = y; rPar[id] = id; rMin[id] = minv;
+        for (let p = ps; p < pe; p++) {                   // 8-conn merge with prev row
+          if (rX1[p] < x0 - 1) { if (p === ps) ps++; continue; }
+          if (rX0[p] > x1 + 1) break;
+          const ra = find(id), rb = find(p);
+          if (ra !== rb) rPar[ra] = rb;
+        }
+      };
+      const piece = (x0, x1, i) => {
+        let mv;
+        if (x0 === aX0[i] && x1 === aX1[i]) mv = aMin[i];
+        else { mv = 255; const b = aY[i] * w;
+          for (let xx = x0; xx <= x1; xx++) { const v = gray[b + xx]; if (v < mv) mv = v; } }
+        emit(x0, x1, aY[i], mv);
+      };
+      for (let i = 0; i < nRaw; i++) {
+        const y = aY[i], ivs = rowIvs[y];
+        if (!ivs) { emit(aX0[i], aX1[i], y, aMin[i]); continue; }
+        if (!ivs.sorted) { ivs.sort((p, q) => p[0] - q[0]); ivs.sorted = true; }
+        let cur = aX0[i]; const end = aX1[i];
+        for (const [m0, m1] of ivs) {
+          if (m1 <= cur) continue;
+          if (m0 > end) break;
+          if (m0 > cur) piece(cur, m0 - 1, i);
+          if (m1 > cur) cur = m1;
+          if (cur > end) break;
+        }
+        if (cur <= end) piece(cur, end, i);
       }
-      for (const o of objects) bigs.push([o.x0, o.x1, o.y0, o.y1]);
-      // transitive: an ellipsis dot 10px from the word but 4px from its
-      // sibling dot is text — each kept small extends the neighbourhood
-      let changed = true;
-      while (changed) {
-        changed = false;
+      // accumulate per-root n/minv/bbox (root-indexed typed arrays)
+      const cN = new Int32Array(nRuns), cMin = new Int32Array(nRuns),
+        cX0 = new Int32Array(nRuns), cX1 = new Int32Array(nRuns),
+        cY0 = new Int32Array(nRuns), cY1 = new Int32Array(nRuns);
+      for (let i = 0; i < nRuns; i++) {
+        const r = find(i);
+        if (!cN[r]) { cMin[r] = 255; cX0[r] = w; cX1[r] = 0; cY0[r] = h; cY1[r] = 0; }
+        cN[r] += rX1[i] - rX0[i] + 1;
+        if (rMin[i] < cMin[r]) cMin[r] = rMin[i];
+        if (rX0[i] < cX0[r]) cX0[r] = rX0[i]; if (rX1[i] > cX1[r]) cX1[r] = rX1[i];
+        if (rY[i] < cY0[r]) cY0[r] = rY[i]; if (rY[i] > cY1[r]) cY1[r] = rY[i];
+      }
+      // classify roots in first-run (raster) order; cls 1 = mask its pixels
+      const cls = new Uint8Array(nRuns);
+      for (let i = 0; i < nRuns; i++) {
+        const r = find(i);
+        if (!cN[r] || cls[r]) continue;                   // visited via earlier run
+        cls[r] = 2;                                       // classified, keep
+        if (cMin[r] >= 244) cls[r] = 1;                   // ghost
+        else if (cN[r] > 12) bigs.push([cX0[r], cX1[r], cY0[r], cY1[r]]);
+        else if (cX1[r] - cX0[r] < 4 && cY1[r] - cY0[r] < 4)
+          smalls.push({ x0: cX0[r], x1: cX1[r], y0: cY0[r], y1: cY1[r], minv: cMin[r], r });
+      }
+      // All neighbourhood questions below ("is this speck near text / near a
+      // sibling speck?") are answered from a 16px bucket grid instead of
+      // walking every big blob per speck (smalls × bigs × restart rounds —
+      // the dominant remaining cost on residue-heavy pages). The keep set is
+      // a monotone closure and the swarm groups are a partition, so the
+      // verdicts are identical to the old restart-loop by construction.
+      // Pages with no smalls skip every allocation here.
+      if (smalls.length) {
+        for (const o of objects) bigs.push([o.x0, o.x1, o.y0, o.y1]);
+        const gw = (w >> 4) + 2, gh = (h >> 4) + 2;
+        const cellsOf = (x0, x1, y0, y1, f) => {
+          const cx0 = Math.max(0, x0 >> 4), cx1 = Math.min(gw - 1, x1 >> 4);
+          const cy0 = Math.max(0, y0 >> 4), cy1 = Math.min(gh - 1, y1 >> 4);
+          for (let cy = cy0; cy <= cy1; cy++)
+            for (let cx = cx0; cx <= cx1; cx++) f(cy * gw + cx);
+        };
+        // transitive keep: an ellipsis dot 10px from the word but 4px from
+        // its sibling dot is text — each kept small extends the neighbourhood
+        // (grid seed from the bigs, then BFS speck-to-speck)
+        const bigGrid = new Array(gw * gh), smGrid = new Array(gw * gh);
+        for (const b of bigs)
+          cellsOf(b[0] - 8, b[1] + 8, b[2] - 8, b[3] + 8, c => (bigGrid[c] ??= []).push(b));
+        for (const s of smalls)
+          cellsOf(s.x0, s.x1, s.y0, s.y1, c => (smGrid[c] ??= []).push(s));
+        const queue = [];
         for (const s of smalls) {
-          if (s.keep) continue;
-          for (const [bx0, bx1, by0, by1] of bigs)
-            if (s.x0 <= bx1 + 8 && s.x1 >= bx0 - 8 && s.y0 <= by1 + 8 && s.y1 >= by0 - 8) {
-              s.keep = true; bigs.push([s.x0, s.x1, s.y0, s.y1]); changed = true; break;
-            }
+          let hit = false;
+          cellsOf(s.x0, s.x1, s.y0, s.y1, c => {
+            if (hit || !bigGrid[c]) return;
+            for (const [bx0, bx1, by0, by1] of bigGrid[c])
+              if (s.x0 <= bx1 + 8 && s.x1 >= bx0 - 8 && s.y0 <= by1 + 8 && s.y1 >= by0 - 8) {
+                hit = true; return;
+              }
+          });
+          if (hit) { s.keep = true; queue.push(s); }
         }
+        while (queue.length) {
+          const q = queue.pop();
+          cellsOf(q.x0 - 8, q.x1 + 8, q.y0 - 8, q.y1 + 8, c => {
+            const lst = smGrid[c]; if (!lst) return;
+            for (const t of lst)
+              if (!t.keep && t.x0 <= q.x1 + 8 && t.x1 >= q.x0 - 8 &&
+                  t.y0 <= q.y1 + 8 && t.y1 >= q.y0 - 8) { t.keep = true; queue.push(t); }
+          });
+        }
+        // isolated smalls: faint ones are residue outright; DARK ones are real
+        // punctuation unless they come in a swarm (emblem residue is dozens of
+        // specks chained ≤12px apart — a sentence period stranded after a
+        // whitened hyperlink is alone and stays readable)
+        const iso = smalls.filter(s => !s.keep && s.minv < 160);
+        const isoGrid = new Array(gw * gh);
+        for (const s of iso) { s.grp = null;
+          cellsOf(s.x0, s.x1, s.y0, s.y1, c => (isoGrid[c] ??= []).push(s)); }
+        const groups2 = [];
+        for (const s of iso) {
+          if (s.grp) continue;
+          const g2 = [s]; s.grp = g2;
+          for (let gi = 0; gi < g2.length; gi++) {
+            const q = g2[gi];
+            cellsOf(q.x0 - 12, q.x1 + 12, q.y0 - 12, q.y1 + 12, c => {
+              const lst = isoGrid[c]; if (!lst) return;
+              for (const t of lst)
+                if (!t.grp && q.x0 <= t.x1 + 12 && q.x1 >= t.x0 - 12 &&
+                    q.y0 <= t.y1 + 12 && q.y1 >= t.y0 - 12) { t.grp = g2; g2.push(t); }
+            });
+          }
+          groups2.push(g2);
+        }
+        for (const g2 of groups2)
+          if (g2.length < 4) for (const s of g2) s.keep = true;
       }
-      // isolated smalls: faint ones are residue outright; DARK ones are real
-      // punctuation unless they come in a swarm (emblem residue is dozens of
-      // specks chained ≤12px apart — a sentence period stranded after a
-      // whitened hyperlink is alone and stays readable)
-      const iso = smalls.filter(s => !s.keep && s.minv < 160);
-      for (const s of iso) s.grp = null;
-      const groups2 = [];
-      for (const s of iso) {
-        if (s.grp) continue;
-        const g2 = [s]; s.grp = g2;
-        for (let gi = 0; gi < g2.length; gi++)
-          for (const t of iso)
-            if (!t.grp && g2[gi].x0 <= t.x1 + 12 && g2[gi].x1 >= t.x0 - 12 &&
-                g2[gi].y0 <= t.y1 + 12 && g2[gi].y1 >= t.y0 - 12) { t.grp = g2; g2.push(t); }
-        groups2.push(g2);
-      }
-      for (const g2 of groups2)
-        if (g2.length < 4) for (const s of g2) s.keep = true;
       for (const s of smalls)
-        if (!s.keep) for (const j of s.px) { mask[j] = 1; mRows[(j / w) | 0] = 1; }
+        if (!s.keep) cls[s.r] = 1;
+      // one masking sweep: ghosts + unkept smalls, run-wise
+      for (let i = 0; i < nRuns; i++) {
+        if (cls[find(i)] !== 1) continue;
+        const b = rY[i] * w; mRows[rY[i]] = 1;
+        for (let xx = rX0[i]; xx <= rX1[i]; xx++) mask[b + xx] = 1;
+      }
     }
     mask._rows = mRows;
     return { mask, objects };
@@ -399,9 +558,38 @@
   // predictions (pred > 254−2·TOL) prove nothing from a white page and stay
   // out of the mask. Tie-break on the original candidate order (_i) keeps
   // acceptance independent of group iteration order.
+  // ---- discriminating-first ink order ----
+  // tryCand walks a candidate's ink arrays in order and hard-rejects at the
+  // first pixel the page cannot support; its verdict is order-invariant
+  // (reject iff ANY pixel hard-fails, counts are sums), so the walk order is
+  // free to choose. Build order (column-major, left→right) is pessimal: the
+  // scanner anchors every candidate by its first ink column, so the left edge
+  // nearly always matches and wrong candidates die late (~9 px). Reorder by
+  // pool-census rarity — pixels whose (row, col, byte-bucket) prediction is
+  // shared by the fewest pool mates first — and rejects die in ~3 px. Applied
+  // once per pool (guarded), in the aligned frame row = dy+r, col = c−inkLeft.
+  function rareOrder(cands) {
+    const census = new Map();
+    const key = (g, k) =>
+      ((g.dy + g.inkR[k] + 64) << 12) | ((g.inkC[k] - g.inkLeft) << 3) | (g.inkB[k] >> 5);
+    for (const g of cands) for (let k = 0; k < g.inkC.length; k++)
+      census.set(key(g, k), (census.get(key(g, k)) || 0) + 1);
+    for (const g of cands) {
+      const n = g.inkC.length;
+      if (g._rare || n < 2) { g._rare = 1; continue; }
+      g._rare = 1;
+      const idx = Array.from({ length: n }, (_, k) => k);
+      const sc = idx.map(k => census.get(key(g, k)));
+      idx.sort((a, b) => sc[a] - sc[b] || g.inkB[a] - g.inkB[b] || a - b);
+      const pick = (arr) => arr.constructor.from(idx, k => arr[k]);
+      g.inkC = pick(g.inkC); g.inkR = pick(g.inkR); g.inkB = pick(g.inkB); g.inkA = pick(g.inkA);
+    }
+  }
+
   function anchorGroups(set, phy, quant, TOL) {
     const cands = set.byPhy.get(phy) ?? [];
     const ASC = set.maxAsc, span = ASC + set.maxDesc;
+    if (!cands._rare) { rareOrder(cands); cands._rare = true; }
     if (span > 64) return null;                        // mask would overflow: plain path
     cands.forEach((g, i) => { g._i = i; });
     // Per glyph column, TWO row masks. Ink mask (m): rows whose fresh-canvas
@@ -559,10 +747,16 @@
         if (hasM || hasE) {
           for (let x = xFrom; x < xTo; x++) {
             if ((hasM && mask[po + x]) || (hasE && explained[po + x])) {
-              const pv = g[po + x];
-              canvas[co + x] = pv;
+              // skip cells are don't-care and never count as unexplained. A
+              // foreign QUANT (a reconstructed palette whose LUT disagrees
+              // with an OBSERVED page byte — lut[pv] !== pv) used to count
+              // them here; nothing can ever explain such a cell, and the
+              // fail-absorb loop could not retire it either → the scan
+              // LIVELOCKED on its column (EFTA00093044 p332, 13 h CPU). On
+              // true-palette pages every observed byte is a fixpoint and
+              // this branch never counted anything — dropping it is a no-op.
+              canvas[co + x] = g[po + x];
               skip[co + x] = 1;
-              if (judged && QUANT && pv !== QUANT[pv]) unexpl[x - xFrom]++;
             } else if (judged && g[po + x] !== q255) unexpl[x - xFrom]++;
           }
         } else if (judged) {
@@ -800,7 +994,16 @@
             return false;
           });
           if (okDust) {
-            for (const [x, y] of px) setCan(x, y, pageAt(x, y));
+            for (const [x, y] of px) {
+              setCan(x, y, pageAt(x, y));
+              // same retire rule as the fail-absorb: a non-fixpoint dust
+              // byte would stay "unexplained" forever and livelock here
+              const pv = pageAt(x, y);
+              if (QUANT && pv !== QUANT[pv] && !skip[(y - y0) * bw + (x - xFrom)]) {
+                skip[(y - y0) * bw + (x - xFrom)] = 1;
+                if (y >= cTop && y < cBot) unexpl[x - xFrom]--;
+              }
+            }
             cursor = col;
             continue;
           }
@@ -853,6 +1056,12 @@
           if (px <= col + 2) {
             setCan(px, py, pageAt(px, py));
             skip[(py - y0) * bw + (px - xFrom)] = 1;
+            // absorbed = retired, even when the byte is no fixpoint of a
+            // foreign QUANT (setCan's fixpoint rule then leaves it counted
+            // and the loop re-enters this column forever). Fixpoint bytes
+            // were already retired by setCan — this is a no-op for them.
+            if (py >= cTop && py < cBot && QUANT && pageAt(px, py) !== QUANT[pageAt(px, py)])
+              unexpl[px - xFrom]--;
           }
         }
         // fail/frag classification is DEFERRED to line end: at fail time the
@@ -1007,7 +1216,12 @@
       det = page._det = { gray: page.gray, mask: d.mask, objects: d.objects,
         bands: findBands(page, d.mask), quant: null };
     }
-    const quant = opts?.quant ? (det.quant ??= quantMap(page)) : null;
+    // opts.quant: true derives the map from the page histogram (quantMap); a
+    // 256-entry LUT is applied as-is — for producers whose true palette is
+    // known (the bench reads it from the PDF's /Indexed colorspace).
+    const quant = opts?.quant
+      ? (opts.quant.length === 256 ? opts.quant : (det.quant ??= quantMap(page)))
+      : null;
     const q = quant ? v => quant[v] : v => v;
     const { mask, objects } = det;
     // box halos (rect ±2): an unexplained cluster that TOUCHES a halo and is
