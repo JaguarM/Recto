@@ -12,7 +12,6 @@ API. Everything else is a plugin.
   text and typography, and hosts the viewer. It runs no analysis of its own.
 - **`text_tool`** — edit and add text with real font metrics (HarfBuzz-shaped widths).
 - **`embedded_text_viewer`** — inspect the text already embedded in the PDF.
-- **`webgl_mask`** — GPU-accelerated region masking.
 - **`extracted_text`** — backend text extraction and glyph calibration.
 
 Optional plugins ship separately and are documented in [`guide/plugins/`](guide/plugins/) —
