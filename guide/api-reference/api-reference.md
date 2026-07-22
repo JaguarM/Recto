@@ -12,7 +12,9 @@ The Django backend exposes several HTTP endpoints organized into modular apps.
 |--------|------|-------------|
 | `GET` | `/` | Serves the single-page application |
 | `POST` | `/open-document` | Open a PDF or image: pages, embedded text, typography. No analysis. |
-| `GET` | `/open-default` | Opens the bundled sample document |
+| `GET` | `/open-default` | Opens the startup document — the PDF sitting in `assets/pdfs/` (swap it by replacing the file; alphabetically first wins if several) |
+
+Both open endpoints include a `sha256` field (hash of the document bytes) in the response — a stable document identity that plugins key per-document caches off (exposed to the frontend as `state.docHash`).
 
 ### `text_tool` (Typography Plugin)
 

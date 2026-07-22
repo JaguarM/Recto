@@ -16,6 +16,8 @@ const state = {
   // Document
   hasPdf: false,
   currentFile: null,      // the File the user opened — plugins may re-post it
+  docHash: null,          // SHA-256 of the document bytes (server-computed) —
+                          // stable identity plugins key per-document caches off
 
   activeTool: null, // 'add-box' or null
 };

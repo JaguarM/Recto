@@ -32,6 +32,7 @@ async function loadDocument(data, file) {
   state.numPages = data.num_pages || state.pageImages.length || 1;
   state.pageWidth = data.page_width || GEO.PAGE_WIDTH_PX;
   state.pageHeight = data.page_height || GEO.PAGE_HEIGHT_PX;
+  state.docHash = data.sha256 || null;
 
   els.pageCountElem.textContent = `/ ${state.numPages}`;
   els.pageInputElem.value = 1;

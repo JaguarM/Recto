@@ -20,11 +20,14 @@ const ocrToolState = {
   passHint: null,   // winning pass of the previous page (producer is stable)
   autoSeq: 0,       // auto-read generation — a new document supersedes the old cycle
   autoDone: false,  // true once the auto read + layer choice for this document settled
+  isDefault: false, // current doc is the auto-loaded startup PDF (cache-eligible)
 };
 
 const OCR_GLYPHS_BASE = '/static/ocr_tool/glyphs/';
 const OCR_UNCLEAN_COLOR = 'rgba(230, 124, 0, 0.85)';   // non-byte-clean lines
 const OCR_UNREAD_COLOR = 'rgba(217, 48, 37, 0.85)';    // □ marker boxes
+const OCR_CACHE_BASE = '/ocr/cache/';                  // + document sha256 (state.docHash)
+const OCR_CACHE_VERSION = 1;   // bump when the slim payload shape changes
 
 function setOcrStatus(msg) {
   const el = document.getElementById('ocr-status');
@@ -197,6 +200,88 @@ function ocrAddBoxes(pageNum, img, res, pass) {
   return tally;
 }
 
+// ── Precomputed cache (startup document only) ─────────────────
+// The auto-read of the bundled startup document is precomputed once in local
+// dev: after a full engine run the slimmed results are POSTed to
+// /ocr/cache/<sha256> (the backend stores them in ocr_tool/cache/, committed
+// to the repo; production is read-only). On later loads a cache hit replays
+// the boxes through ocrAddBoxes without the engine — or the ~10 MB glyph
+// download. Uploaded documents never touch the cache: char_training's
+// recto smoke test uploads its certified document and must always exercise
+// the real engine.
+
+// The engine's live result references whole glyph sets; keep exactly the
+// fields ocrAddBoxes reads so a cached page replays through the same code
+// path as a live read.
+function ocrSlimResult(res) {
+  return {
+    lines: (res.lines || []).map(L => ({
+      text: L.text, font: L.font, baseline: L.baseline, top: L.top, bot: L.bot,
+      clean: !!L.clean,
+      fails: Array.from(L.fails || []),
+      boxes: (L.boxes || []).map(b => Array.from(b)),
+      set: L.set ? { maxAsc: L.set.maxAsc, maxDesc: L.set.maxDesc, sizePx: L.set.sizePx } : null,
+      entries: (L.entries || []).map(e => ({ i: e.i, pen: e.pen, adv: e.adv, ch: e.ch })),
+    })),
+    objects: (res.objects || []).filter(o => o.type === 'box')
+      .map(o => ({ type: o.type, x0: o.x0, y0: o.y0, x1: o.x1, y1: o.y1 })),
+  };
+}
+
+function ocrSlimPass(pass) {
+  return { tol: pass?.tol || 0, quant: !!pass?.quant, union: !!pass?.union };
+}
+
+async function ocrFetchCache(hash) {
+  if (!hash) return null;
+  try {
+    const r = await fetch(OCR_CACHE_BASE + hash);
+    if (!r.ok) return null;
+    const data = await r.json();
+    if (data?.version !== OCR_CACHE_VERSION || !Array.isArray(data.pages)) return null;
+    return data;
+  } catch { return null; }
+}
+
+// Best-effort: production answers 403 (read-only cache) — the finished run's
+// boxes are on screen either way, the stored copy just doesn't refresh.
+async function ocrStoreCache(hash, payload) {
+  try {
+    const r = await fetch(OCR_CACHE_BASE + hash, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    if (r.ok) console.info('OCR: precomputed cache stored for', hash.slice(0, 12));
+  } catch { /* offline etc. — never surface */ }
+}
+
+// Rebuild boxes from a cache payload — same tail as a live full read.
+function ocrApplyCached(cached) {
+  const totals = { lines: 0, clean: 0, unread: 0, boxes: 0 };
+  const fonts = new Set();
+  for (const pg of cached.pages) {
+    ocrClearPage(pg.page);
+    const t = ocrAddBoxes(pg.page, { naturalWidth: pg.w, naturalHeight: pg.h }, pg.res, pg.pass);
+    totals.lines += t.lines; totals.clean += t.clean;
+    totals.unread += t.unread; totals.boxes += t.boxes;
+    for (const L of pg.res.lines) if (L.font) fonts.add(L.font);
+  }
+  window.utbConnectRedactionsToLines?.();
+  if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
+  if (typeof calculateAllWidths === 'function') calculateAllWidths();
+  // same status wording as a live run, flagged as precomputed
+  const lastPass = cached.pages[cached.pages.length - 1]?.pass || {};
+  const cert = lastPass.tol ? `clean@±${lastPass.tol}` : 'byte-clean';
+  const shownFonts = [...new Set([...fonts].map(f => f.includes('+') ? 'mixed fonts' : f))];
+  setOcrStatus(`${totals.lines} lines, ${totals.clean} ${cert}` +
+    (totals.unread ? `, ${totals.unread} unread (□)` : '') +
+    (totals.boxes ? ` · ${totals.boxes} redaction boxes` : '') +
+    ` · ${shownFonts.join(' ') || '—'}` +
+    (lastPass.quant ? ' · palette producer' : '') +
+    ' · precomputed');
+}
+
 async function ocrReadOnePage(pageNum, label, carry) {
   const img = await ocrLoadPageImage(pageNum);
   if (!img) return null;
@@ -240,6 +325,9 @@ async function ocrRun(allPages) {
     // sequential whole-document read: pages share one hint carry (same as
     // char_training's blindOcrDocument); single-page reads stay stateless
     const carry = allPages ? {} : null;
+    // full reads of the startup document refresh the precomputed cache
+    const runHash = state.docHash;
+    const collected = (allPages && ocrToolState.isDefault && runHash) ? [] : null;
     let lastPass = null, fonts = new Set();
     for (const p of nums) {
       if (ocrToolState.cancel) break;
@@ -252,7 +340,11 @@ async function ocrRun(allPages) {
       totals.unread += t.unread; totals.boxes += t.boxes;
       lastPass = out.pass;
       for (const L of out.res.lines) if (L.font) fonts.add(L.font);
+      collected?.push({ page: p, w: out.img.naturalWidth, h: out.img.naturalHeight,
+        pass: ocrSlimPass(out.pass), res: ocrSlimResult(out.res) });
     }
+    if (collected?.length && !ocrToolState.cancel)
+      ocrStoreCache(runHash, { version: OCR_CACHE_VERSION, pages: collected });
     window.utbConnectRedactionsToLines?.();
     if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
     if (typeof calculateAllWidths === 'function') calculateAllWidths();
@@ -325,9 +417,19 @@ async function ocrAutoRead() {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
   // let a cancelled run on the previous document drain before starting
   while (ocrToolState.running) { await sleep(150); if (!live()) return; }
-  await ocrRun(true);
-  // still running here = ocrRun bounced off a manual run that won the race
-  if (!live() || ocrToolState.running || ocrToolState.cancel) return;
+  // Startup document: replay the precomputed cache when one matches — no
+  // engine, instant boxes. Anything uploaded always gets a live read.
+  let applied = false;
+  if (ocrToolState.isDefault && typeof utbState !== 'undefined') {
+    const cached = await ocrFetchCache(state.docHash);
+    if (!live() || ocrToolState.running) return;
+    if (cached) { ocrApplyCached(cached); applied = true; }
+  }
+  if (!applied) {
+    await ocrRun(true);
+    // still running here = ocrRun bounced off a manual run that won the race
+    if (!live() || ocrToolState.running || ocrToolState.cancel) return;
+  }
   // the embedded span fetch races the (much slower) OCR run — normally it
   // finished long ago, but give a slow backend a moment before comparing
   const deadline = Date.now() + 5000;
@@ -367,11 +469,12 @@ async function ocrAutoRead() {
 
 // New document: boxes were already reset by the core; drop page-derived state,
 // abandon any run still working on the old document, and start the auto read.
-PDFHooks.on('document:loaded', () => {
+PDFHooks.on('document:loaded', (e) => {
   ocrToolState.passHint = null;
   ocrToolState.engine = null;
   ocrToolState.cancel = ocrToolState.running;
   ocrToolState.autoDone = false;
+  ocrToolState.isDefault = !!e?.isDefault;   // only the startup doc uses the cache
   setOcrStatus('idle');
   ocrAutoRead();
 });

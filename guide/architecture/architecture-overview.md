@@ -94,7 +94,7 @@ recto/
 │
 ├── assets/
 │   ├── fonts/                      # .ttf font files for width calculation
-│   └── pdfs/                       # Sample documents
+│   └── pdfs/                       # Startup document — the PDF here auto-loads on open
 │
 ├── guide/                          # Documentation (you are here)
 └── db.sqlite3

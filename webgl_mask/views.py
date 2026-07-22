@@ -1,19 +1,18 @@
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
+from pdf_core.logic.default_document import find_default_document
+
 from .logic.artifact_visualizer import generate_all_masks
 
-import os
-from pathlib import Path
-
-_DEFAULT_PDF = Path(__file__).resolve().parent.parent / 'assets' / 'pdfs' / 'times' / 'efta00018586.pdf'
 
 @csrf_exempt
 def generate_masks(request):
     if request.method == 'GET' and request.GET.get('default') == 'true':
-        if not _DEFAULT_PDF.exists():
+        default_pdf = find_default_document()
+        if default_pdf is None:
             return JsonResponse({"detail": "Default PDF not found"}, status=404)
-        file_bytes = _DEFAULT_PDF.read_bytes()
+        file_bytes = default_pdf.read_bytes()
         masks = generate_all_masks(file_bytes)
         return JsonResponse({"mask_images": masks})
 

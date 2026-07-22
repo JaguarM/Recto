@@ -6,13 +6,16 @@ from pdf_core.registry import register_tool
 class OcrTool(PDFTool):
     """Auto OCR — the char_training blind reader running on the page rasters.
 
-    Client-side only: no routes, no models. The engine/ and glyphs/ static
-    files are synced VERBATIM from the char_training repo by its
-    ``tools/sync-recto.mjs`` (``npm run sync:recto`` there) — never edit them
-    here; edit in char_training, re-certify against its corpus gate, re-sync.
-    Only ocr-tool.js (the Recto adapter) is owned by this app.
+    The engine runs client-side; the only backend piece is the precomputed-OCR
+    cache for the startup document (views.py — written in dev, read-only in
+    production). The engine/ and glyphs/ static files are synced VERBATIM from
+    the char_training repo by its ``tools/sync-recto.mjs`` (``npm run
+    sync:recto`` there) — never edit them here; edit in char_training,
+    re-certify against its corpus gate, re-sync. Only ocr-tool.js (the Recto
+    adapter) and the cache endpoint are owned by this app.
     """
     name = 'ocr_tool'
+    url_module = 'ocr_tool.urls'
     styles = [{'path': 'ocr_tool/styles.css'}]
     toolbar_button = 'ocr_tool/toolbar_button.html'
     options_bar = 'ocr_tool/options_bar.html'
@@ -23,5 +26,5 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=c1b3ec8c'},
         {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=92e6f266'},
         # the adapter (Recto-owned)
-        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=4'},
+        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=5'},
     ]

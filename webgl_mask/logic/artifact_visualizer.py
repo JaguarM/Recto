@@ -7,8 +7,8 @@ import fitz
 
 from .masking import get_grayscale_image_bytes, build_mask_array
 
-# You can edit the source PDF path here
-SOURCE_PDF = "efta00018586.pdf"
+# CLI mode input: defaults to the app's startup PDF (the one in assets/pdfs/);
+# pass a path as the first argument to process another file.
 
 PAGE_W, PAGE_H = 816, 1056
 
@@ -126,8 +126,13 @@ def generate_mask_from_image(img_bytes):
 
 
 if __name__ == "__main__":
-    if os.path.exists(SOURCE_PDF):
-        create_redaction_masks(SOURCE_PDF)
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+    from pdf_core.logic.default_document import find_default_document
+
+    source = sys.argv[1] if len(sys.argv) > 1 else find_default_document()
+    if source and os.path.exists(source):
+        create_redaction_masks(str(source))
         print("Processing finished.")
     else:
-        print(f"Error: Could not find '{SOURCE_PDF}'. Please ensure the file exists.")
+        print("Error: no input PDF. Put one in assets/pdfs/ or pass a path as the first argument.")

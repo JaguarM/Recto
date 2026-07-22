@@ -1,8 +1,7 @@
-from pathlib import Path
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-_DEFAULT_PDF = Path(__file__).resolve().parent.parent / 'assets' / 'pdfs' / 'times' / 'efta00018586.pdf'
+from pdf_core.logic.default_document import find_default_document
 
 
 @csrf_exempt
@@ -15,9 +14,10 @@ def extract_spans(request):
     GET:  processes the bundled default PDF (for auto-load)
     """
     if request.method == 'GET':
-        if not _DEFAULT_PDF.exists():
+        default_pdf = find_default_document()
+        if default_pdf is None:
             return JsonResponse({'detail': 'Default PDF not found'}, status=404)
-        pdf_bytes = _DEFAULT_PDF.read_bytes()
+        pdf_bytes = default_pdf.read_bytes()
     elif request.method == 'POST':
         if 'file' not in request.FILES:
             return JsonResponse({'detail': 'No file uploaded'}, status=400)

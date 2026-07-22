@@ -32,6 +32,31 @@ text from the pixels — *certified, not guessed*: a line is byte-clean only
 when its glyphs reproduce the page bytes exactly through the producer's
 proven blend law; anything unexplained is an honest `□`.
 
+## Precomputed cache for the startup document
+
+The **startup document** (the PDF in `assets/pdfs/`, auto-loaded on open) is
+the one document every visitor sees, so its auto-read is precomputed instead
+of re-run in every browser:
+
+- After a full engine read of the startup document, the adapter slims each
+  page's result down to exactly the fields `ocrAddBoxes` consumes and POSTs
+  them to `/ocr/cache/<sha256>` (the document hash the core returns as
+  `state.docHash`). The backend (`views.py`) stores it as
+  `ocr_tool/cache/<sha256>.json` — **dev only**; in production the endpoint
+  answers 403 so nobody can overwrite what visitors see.
+- On load, the auto-read first GETs that URL. A hit replays the boxes through
+  the normal `ocrAddBoxes` path — no engine, no ~10 MB glyph download — and
+  the status line ends in `precomputed`. A miss falls back to the live engine
+  read (unchanged behaviour).
+- The cache files are **committed**: swap the startup PDF, open the app
+  locally once, let the auto OCR finish, commit the new JSON. Re-running
+  **All pages** on the startup document refreshes it (e.g. after an engine
+  re-sync). `version` (`OCR_CACHE_VERSION`) guards the payload shape.
+- **Uploaded documents never touch the cache** — deliberately, so
+  char_training's `npm run recto-test` (which uploads its certified document
+  and waits for the auto cycle) always exercises the real engine, and a
+  DEBUG-mode test run can't self-poison a later one.
+
 ## The engine is developed elsewhere
 
 `static/ocr_tool/engine/` (`core.js`, `ocr.js`, `blindocr.js`) and
@@ -83,9 +108,10 @@ lines → UnifiedTextBoxes) is owned by this app and edited here.
   `unified-text-box.js` / `etv-fetch.js`, the `ocr` entries in the type color
   maps) are inert when this plugin is absent — same pattern as the
   `redaction` box type.
-- No backend: no routes, no models, no Python logic. Removing the plugin is
-  deleting this folder (plus this docs folder and its row in
-  [`../README.md`](../README.md)).
+- Backend: only the precomputed-OCR cache route (`/ocr/cache/<hash>`,
+  `views.py`/`urls.py`, storage in `ocr_tool/cache/`) — no models. Removing
+  the plugin is still just deleting its folder (the cache lives inside it),
+  plus this docs folder and its row in [`../README.md`](../README.md).
 
 ## Limits
 

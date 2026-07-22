@@ -24,7 +24,7 @@ PDF bytes
 
 | Name | Value | Purpose |
 |------|-------|---------|
-| `SOURCE_PDF` | `"efta00018586.pdf"` | Default input path for CLI mode |
+| CLI input | first argument, else the startup PDF (`find_default_document()`) | Input path for CLI mode |
 | `PAGE_W` | `816` | Reference page width in pixels |
 | `PAGE_H` | `1056` | Reference page height in pixels |
 
