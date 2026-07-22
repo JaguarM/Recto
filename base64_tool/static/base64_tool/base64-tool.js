@@ -243,6 +243,50 @@ function b64Download() {
   a.remove();
 }
 
+// ── Auto-scan on load ─────────────────────────────────────────
+// After a document loads, wait for its text layer to settle (the OCR
+// auto-read finishes long after document:loaded), then scan. When attachments
+// are found and the user hasn't opened any subtoolbar yet, the base64 bar
+// opens by itself so download/view are one click away. The OCR plugin's state
+// is read through a guarded global (it's optional and may be absent); without
+// it, "settled" means two polls seeing the same amount of text.
+
+const B64_POLL_MS = 600;
+const B64_POLL_MAX_MS = 180000;   // give a slow whole-document OCR time
+
+function b64TextAmount() {
+  const layer = b64ActiveLayer();
+  if (!layer) return 0;
+  let n = 0;
+  for (const b of utbState.boxes) if (b.type === layer) n += (b.text || '').length;
+  return n;
+}
+
+async function b64AutoScan() {
+  const seq = ++b64State.autoSeq;
+  const live = () => seq === b64State.autoSeq;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const deadline = Date.now() + B64_POLL_MAX_MS;
+  let prev = -1;
+  while (Date.now() < deadline) {
+    await sleep(B64_POLL_MS);
+    if (!live()) return;
+    if (typeof utbState === 'undefined') return;   // no text_tool, nothing to scan
+    const amount = b64TextAmount();
+    const ocr = window.OCRTool?.state;
+    if (ocr ? (ocr.autoDone && !ocr.running) : (amount > 0 && amount === prev)) break;
+    prev = amount;
+  }
+  if (!live() || b64State.scanned) return;   // user beat us to it — leave their result
+  b64Scan();
+  if (!live() || !b64State.blocks.length) return;
+  // don't steal the ribbon if the user already opened some bar
+  if (document.querySelector('#unified-options-bar-container .options-bar:not(.hidden)')) return;
+  const btn = document.getElementById('toggle-b64-tool');
+  const bar = document.getElementById('b64-tool-bar');
+  if (btn && bar) window.openSubtoolbar?.(bar, btn);
+}
+
 // ── Wiring ────────────────────────────────────────────────────
 // Module scope, NOT 'ui:ready' — this is a scripts_after_app entry, so the
 // DOM and registerSubtoolbar/openSubtoolbar already exist (same pattern as
@@ -266,4 +310,4 @@ function b64Download() {
   document.getElementById('b64-download')?.addEventListener('click', b64Download);
 })();
 
-PDFHooks.on('document:loaded', () => b64Reset());
+PDFHooks.on('document:loaded', () => { b64Reset(); b64AutoScan(); });
