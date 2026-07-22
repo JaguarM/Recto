@@ -15,6 +15,7 @@ const b64State = {
   blocks: [],     // { data: Uint8Array, mime, ext, pages: [first, last], chars }
   urls: [],       // object URLs to revoke on rescan / new document
   scanned: false, // a scan ran for the current document
+  autoSeq: 0,     // auto-scan generation — a new document supersedes the old watcher
 };
 
 function b64Status(msg) {
@@ -62,14 +63,16 @@ function b64GatherLines(layerType) {
 // ── Block detection ───────────────────────────────────────────
 
 // A line "looks like base64" when, ignoring whitespace (OCR may insert
-// spaces), it is pure base64 alphabet with at most trailing padding. Prose
-// almost always carries punctuation outside the alphabet, and the strong-line
-// gate below additionally demands the length and character mix of a wrapped
-// attachment body, so headers and ordinary sentences don't qualify.
+// spaces) and any leading '>' quoted-reply markers (a forwarded email quotes
+// the whole attachment body, line by line), it is pure base64 alphabet with
+// at most trailing padding. Prose almost always carries punctuation outside
+// the alphabet, and the strong-line gate below additionally demands the
+// length and character mix of a wrapped attachment body, so headers and
+// ordinary sentences don't qualify.
 const B64_CONTENT = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function b64Stripped(text) {
-  return (text || '').replace(/\s+/g, '');
+  return (text || '').replace(/^\s*(?:>\s*)+/, '').replace(/\s+/g, '');
 }
 
 function b64IsCandidate(text) {
@@ -98,6 +101,9 @@ function b64FindBlocks(lines) {
     run = null;
   };
   for (const line of lines) {
+    // blank / quote-marks-only lines are neutral: they neither extend nor
+    // break a run (an OCR hiccup inside the body must not split the block)
+    if (run && !b64Stripped(line.text)) continue;
     if (b64IsCandidate(line.text)) {
       const s = b64Stripped(line.text);
       if (!run) run = { chars: '', strong: false, firstPage: line.page, lastPage: line.page };

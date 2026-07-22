@@ -14,5 +14,5 @@ class Base64Tool(PDFTool):
     toolbar_button = 'base64_tool/toolbar_button.html'
     options_bar = 'base64_tool/options_bar.html'
     scripts_after_app = [
-        {'path': 'base64_tool/base64-tool.js', 'version': 'v=1'},
+        {'path': 'base64_tool/base64-tool.js', 'version': 'v=2'},
     ]
