@@ -30,6 +30,23 @@ page — the panel, its CSS, and its wiring all live in the plugin.
 - **Requires `text_tool`** (renders through the unified text box system); works with or without `embedded_text_viewer`.
 - Its `engine/` + `glyphs/` static files are synced verbatim from the external `char_training` repo (`npm run sync:recto` there) — edit the engine there, never in this repo. `npm run recto-test` there smoke-tests the embedded engine end to end.
 
+## Base64 attachment decoder
+
+Finds base64 blocks (the wrapped-line body of an email attachment) in the document's
+text, decodes them in the browser, sniffs the file type from the magic bytes (PDF,
+PNG, JPEG, GIF, WebP, ZIP, plain text), and offers each block as a download or an
+in-browser view (new tab). It reads exactly one unified-text-box layer — whichever
+of OCR / embedded is visible on screen — so duplicate layers never interleave and
+corrupt a block.
+
+| Plugin | Docs | What it does | Routes |
+|---|---|---|---|
+| `base64_tool` | *(none yet)* | Base64 block detection → decode → typed download / in-browser view; subtoolbar UI | *(none — fully client-side)* |
+
+- **Requires `text_tool`** (reads `utbState.boxes`; all access guarded so removal
+  never throws). Needs a text source to be useful: an `ocr_tool` read or an
+  `embedded_text_viewer` layer.
+
 ## Redaction matching
 
 Candidate-name matching against redaction bars: it owns the candidates right panel (the
@@ -66,6 +83,7 @@ UI — it runs on the generic `redactions:connected` PDFHooks event that
 ```
 redaction_matching ──runtime globals──> text_tool ──> pdf_core
 ocr_tool           ──runtime globals──> text_tool ──> pdf_core
+base64_tool        ──runtime globals──> text_tool ──> pdf_core
 redaction_refiner  ──'redactions:connected'──> embedded_text_viewer ──> pdf_core
 ```
 
