@@ -29,8 +29,9 @@ local_settings.py
 .env.*
 !.env.example
 
-# Debug output
+# Debug
 debug_out/
+_temp_test_files/
 
 # Editors
 .vscode/
