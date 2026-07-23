@@ -78,23 +78,101 @@ function b64DecodeChars(chars) {
   return bytes;
 }
 
+// Magic-byte type sniffing. Each entry: mime + correct filename extension +
+// human label + how the View button may show it — 'inline' (browser renders
+// the real mime: PDF, images, audio, video, plain text), 'text' (viewable,
+// but forced to text/plain so decoded HTML/SVG/XML can never run script in
+// our origin), or 'none' (archives / unknown binary: download only).
 function b64Sniff(bytes) {
   const at = (i, ...vals) => vals.every((v, k) => bytes[i + k] === v);
-  if (at(0, 0x25, 0x50, 0x44, 0x46)) return { mime: 'application/pdf', ext: 'pdf', label: 'PDF', icon: '📄' };
-  if (at(0, 0x89, 0x50, 0x4E, 0x47)) return { mime: 'image/png', ext: 'png', label: 'PNG image', icon: '🖼️' };
-  if (at(0, 0xFF, 0xD8, 0xFF)) return { mime: 'image/jpeg', ext: 'jpg', label: 'JPEG image', icon: '🖼️' };
-  if (at(0, 0x47, 0x49, 0x46, 0x38)) return { mime: 'image/gif', ext: 'gif', label: 'GIF image', icon: '🖼️' };
-  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50))
-    return { mime: 'image/webp', ext: 'webp', label: 'WebP image', icon: '🖼️' };
-  if (at(0, 0x50, 0x4B)) return { mime: 'application/zip', ext: 'zip', label: 'ZIP archive', icon: '🗜️' };
-  const n = Math.min(bytes.length, 256);
+  const str = (i, len) => String.fromCharCode(...bytes.slice(i, i + len));
+  const has = (needle, limit) => str(0, Math.min(bytes.length, limit)).includes(needle);
+  const t = (mime, ext, label, icon, view = 'inline') => ({ mime, ext, label, icon, view });
+
+  // documents
+  if (str(0, 4) === '%PDF') return t('application/pdf', 'pdf', 'PDF', '📄');
+  if (str(0, 5) === '{\\rtf') return t('application/rtf', 'rtf', 'RTF document', '📄', 'text');
+  if (at(0, 0xD0, 0xCF, 0x11, 0xE0)) return t('application/msword', 'doc', 'Office document (legacy)', '📄', 'none');
+
+  // images
+  if (at(0, 0x89, 0x50, 0x4E, 0x47)) return t('image/png', 'png', 'PNG image', '🖼️');
+  if (at(0, 0xFF, 0xD8, 0xFF)) return t('image/jpeg', 'jpg', 'JPEG image', '🖼️');
+  if (at(0, 0x47, 0x49, 0x46, 0x38)) return t('image/gif', 'gif', 'GIF image', '🖼️');
+  if (at(0, 0x42, 0x4D)) return t('image/bmp', 'bmp', 'BMP image', '🖼️');
+  if (at(0, 0x00, 0x00, 0x01, 0x00)) return t('image/x-icon', 'ico', 'Icon', '🖼️');
+  if (at(0, 0x49, 0x49, 0x2A, 0x00) || at(0, 0x4D, 0x4D, 0x00, 0x2A))
+    return t('image/tiff', 'tif', 'TIFF image', '🖼️', 'none');   // browsers don't render TIFF
+
+  // RIFF container: WebP / WAV / AVI
+  if (str(0, 4) === 'RIFF') {
+    const kind = str(8, 4);
+    if (kind === 'WEBP') return t('image/webp', 'webp', 'WebP image', '🖼️');
+    if (kind === 'WAVE') return t('audio/wav', 'wav', 'WAV audio', '🎵');
+    if (kind === 'AVI ') return t('video/x-msvideo', 'avi', 'AVI video', '🎬', 'none');
+    return t('application/octet-stream', 'riff', 'RIFF file', '📎', 'none');
+  }
+
+  // ISO media (ftyp box): m4a / mp4 / mov / heic
+  if (str(4, 4) === 'ftyp') {
+    const brand = str(8, 4);
+    if (brand.startsWith('M4A')) return t('audio/mp4', 'm4a', 'M4A audio', '🎵');
+    if (brand.startsWith('M4B')) return t('audio/mp4', 'm4b', 'M4B audiobook', '🎵');
+    if (brand.startsWith('qt')) return t('video/quicktime', 'mov', 'QuickTime video', '🎬');
+    if (brand.startsWith('hei') || brand === 'mif1') return t('image/heic', 'heic', 'HEIC image', '🖼️', 'none');
+    return t('video/mp4', 'mp4', 'MP4 video', '🎬');
+  }
+
+  // audio
+  if (str(0, 3) === 'ID3' || (bytes[0] === 0xFF && (bytes[1] & 0xE0) === 0xE0))
+    return t('audio/mpeg', 'mp3', 'MP3 audio', '🎵');
+  if (str(0, 4) === 'OggS') return t('audio/ogg', 'ogg', 'Ogg audio', '🎵');
+  if (str(0, 4) === 'fLaC') return t('audio/flac', 'flac', 'FLAC audio', '🎵');
+
+  // video (EBML: webm or matroska)
+  if (at(0, 0x1A, 0x45, 0xDF, 0xA3))
+    return has('webm', 64) ? t('video/webm', 'webm', 'WebM video', '🎬')
+      : t('video/x-matroska', 'mkv', 'Matroska video', '🎬', 'none');
+
+  // archives
+  if (str(0, 2) === 'PK') {
+    // OOXML/EPUB are ZIPs — the member paths appear early in the stream
+    const head = str(0, Math.min(bytes.length, 4096));
+    if (head.includes('word/')) return t('application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'docx', 'Word document', '📄', 'none');
+    if (head.includes('xl/')) return t('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'xlsx', 'Excel spreadsheet', '📊', 'none');
+    if (head.includes('ppt/')) return t('application/vnd.openxmlformats-officedocument.presentationml.presentation', 'pptx', 'PowerPoint', '📊', 'none');
+    if (head.includes('mimetypeapplication/epub')) return t('application/epub+zip', 'epub', 'EPUB book', '📚', 'none');
+    return t('application/zip', 'zip', 'ZIP archive', '🗜️', 'none');
+  }
+  if (at(0, 0x37, 0x7A, 0xBC, 0xAF)) return t('application/x-7z-compressed', '7z', '7-Zip archive', '🗜️', 'none');
+  if (str(0, 4) === 'Rar!') return t('application/vnd.rar', 'rar', 'RAR archive', '🗜️', 'none');
+  if (at(0, 0x1F, 0x8B)) return t('application/gzip', 'gz', 'Gzip archive', '🗜️', 'none');
+  if (str(0, 3) === 'BZh') return t('application/x-bzip2', 'bz2', 'Bzip2 archive', '🗜️', 'none');
+  if (str(257, 5) === 'ustar') return t('application/x-tar', 'tar', 'TAR archive', '🗜️', 'none');
+
+  // text-ish (viewed as text/plain so markup can never execute)
+  const n = Math.min(bytes.length, 512);
   let printable = 0;
   for (let i = 0; i < n; i++) {
     const c = bytes[i];
-    if (c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127)) printable++;
+    if (c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127) || c >= 128) printable++;
   }
-  if (n && printable / n > 0.9) return { mime: 'text/plain', ext: 'txt', label: 'Text file', icon: '📃' };
-  return { mime: 'application/octet-stream', ext: 'bin', label: 'File', icon: '📎' };
+  if (n && printable / n > 0.9) {
+    const head = str(0, n).trimStart().toLowerCase();
+    if (head.startsWith('<?xml'))
+      return has('<svg', 2048) ? t('image/svg+xml', 'svg', 'SVG image', '🖼️', 'text')
+        : t('application/xml', 'xml', 'XML file', '📃', 'text');
+    if (head.startsWith('<svg')) return t('image/svg+xml', 'svg', 'SVG image', '🖼️', 'text');
+    if (head.startsWith('<!doctype html') || head.startsWith('<html'))
+      return t('text/html', 'html', 'HTML file', '📃', 'text');
+    if (head.startsWith('{') || head.startsWith('[')) {
+      try { JSON.parse(str(0, bytes.length)); return t('application/json', 'json', 'JSON file', '📃', 'text'); }
+      catch { /* not valid JSON — plain text */ }
+    }
+    if (/^(from|received|return-path|mime-version|date|subject):/.test(head))
+      return t('message/rfc822', 'eml', 'Email message', '✉️', 'text');
+    return t('text/plain', 'txt', 'Text file', '📃');
+  }
+  return t('application/octet-stream', 'bin', 'File', '📎', 'none');
 }
 
 function fmtSize(n) {
@@ -147,8 +225,8 @@ function attPageRange(pages) {
   return pages[0] === pages[1] ? `p. ${pages[0]}` : `p. ${pages[0]}–${pages[1]}`;
 }
 
-function attBlockUrl(block) {
-  const url = URL.createObjectURL(new Blob([block.data], { type: block.mime }));
+function attBlockUrl(block, mimeOverride) {
+  const url = URL.createObjectURL(new Blob([block.data], { type: mimeOverride || block.mime }));
   attState.urls.push(url);
   return url;
 }
@@ -185,11 +263,13 @@ function attRender() {
         </div>
       </div>
       <div class="att-actions">
-        <button class="primary att-view">View</button>
+        <button class="primary att-view"${block.view === 'none' ? ' disabled title="No browser preview for this type — use Download"' : ''}>View</button>
         <button class="att-dl">Download</button>
       </div>`;
     card.querySelector('.att-view').addEventListener('click', () => {
-      window.open(attBlockUrl(block), '_blank');
+      // 'text' types (HTML/SVG/XML/…) open as text/plain: readable, but the
+      // decoded markup can never run script in this page's origin.
+      window.open(attBlockUrl(block, block.view === 'text' ? 'text/plain' : null), '_blank');
     });
     card.querySelector('.att-dl').addEventListener('click', () => {
       const a = document.createElement('a');
