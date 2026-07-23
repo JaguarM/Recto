@@ -42,6 +42,8 @@ ALLOWED_HOSTS = os.environ.get(
 CSRF_TRUSTED_ORIGINS = [
     'https://unbarpdf.com',
     'http://unbarpdf.com',
+    'https://www.unbarpdf.com',
+    'http://www.unbarpdf.com',
 ]
 
 

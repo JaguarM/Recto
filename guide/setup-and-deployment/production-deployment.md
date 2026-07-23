@@ -45,16 +45,17 @@ The file `recto.service` runs Gunicorn as `www-data`:
 
 ```ini
 [Unit]
-Description=Recto Gunicorn
+Description=Gunicorn instance to serve Recto
 After=network.target
 
 [Service]
 User=www-data
 Group=www-data
 WorkingDirectory=/var/www/recto
-ExecStart=/var/www/recto/venv/bin/gunicorn \
-    recto.wsgi:application \
-    --bind unix:/var/www/recto/recto.sock
+Environment="PATH=/var/www/recto/venv/bin"
+ExecStart=/var/www/recto/venv/bin/gunicorn --workers 3 --timeout 120 --bind unix:recto.sock -m 007 recto.wsgi:application
+Restart=on-failure
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
@@ -73,16 +74,20 @@ The file `nginx_app.conf` proxies to the Gunicorn socket and serves static files
 ```nginx
 server {
     listen 80;
-    server_name unbarPDF.com;
-
-    location /static/ {
-        alias /var/www/recto/static/;
-    }
+    server_name unbarPDF.com www.unbarpdf.com;
 
     location / {
+        include proxy_params;
         proxy_pass http://unix:/var/www/recto/recto.sock;
-        proxy_set_header Host $host;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+
+    # Allow large PDF uploads (up to 500MB) — without this, Nginx's 1MB
+    # default rejects big documents before Django ever sees them
+    client_max_body_size 500M;
+
+    # Serve static files directly
+    location /static/ {
+        alias /var/www/recto/static/;
     }
 }
 ```

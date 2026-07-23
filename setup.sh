@@ -82,6 +82,6 @@ if ! command -v certbot &> /dev/null; then
 fi
 
 # Run certbot
-sudo certbot --nginx -d unbarPDF.com
+sudo certbot --nginx -d unbarPDF.com -d www.unbarpdf.com
 
 echo -e "${GREEN}Installation Complete! Check https://unbarPDF.com${NC}"
