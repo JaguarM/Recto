@@ -40,6 +40,23 @@ function b64IsStrong(text) {
 // Reading-order lines -> { blocks: [...closed...], open: run|null }.
 // The open run is the tail candidate that never flushed — a possible
 // attachment continuing onto pages not yet read.
+//
+// Two OCR realities shape the rules here (a wrapped attachment body is ONE
+// file and must come out as one file):
+// - Long base64 lines wrap, dropping the overflow (1–3 chars, e.g. a lone
+//   "F") onto its own line. Such a fragment CONTINUES the current run —
+//   requiring candidate length there would split the attachment at every
+//   wrap.
+// - '=' padding genuinely ends an attachment, but a misread can also plant
+//   '=' mid-body. So padding only *closes* the run ("padEnded"); the split
+//   happens when what follows is prose (normal flush) or base64 that decodes
+//   to a recognizable NEW file header (two attachments back to back). Body
+//   that decodes to noise means the '=' was a misread — the run continues,
+//   because splitting one file in half destroys both halves while a merged
+//   file survives a 1–2 byte corruption. (Trade-off: two adjacent
+//   attachments with NO separator line where the second has no sniffable
+//   magic — e.g. two text files — would merge; real emails always carry
+//   MIME boundary lines between attachments, so prose-flush handles them.)
 function b64FindBlocks(lines) {
   const blocks = [];
   let run = null;
@@ -49,14 +66,18 @@ function b64FindBlocks(lines) {
     run = null;
   };
   for (const line of lines) {
-    if (run && !b64Stripped(line.text)) continue;   // OCR hiccup: neutral
-    if (b64IsCandidate(line.text)) {
-      const s = b64Stripped(line.text);
+    const s = b64Stripped(line.text);
+    if (run && !s) continue;                        // OCR hiccup: neutral
+    const cand = b64IsCandidate(line.text);
+    const frag = !cand && run && s.length < 4 && /^[A-Za-z0-9+/=]+$/.test(s);
+    if (cand || frag) {
+      const strong = b64IsStrong(line.text);
+      if (run?.padEnded && b64StartsNewFile(s)) flush();   // next attachment starts
       if (!run) run = { chars: '', strong: false, firstPage: line.page, lastPage: line.page };
       run.chars += s;
-      run.strong = run.strong || b64IsStrong(line.text);
+      run.strong = run.strong || strong;
       run.lastPage = line.page;
-      if (s.endsWith('=')) flush();   // padding closes the attachment body
+      run.padEnded = s.endsWith('=');
     } else {
       flush();
     }
@@ -68,8 +89,24 @@ function b64FindBlocks(lines) {
   return { blocks, open };
 }
 
+// Would this base64 line open a NEW file? Decode its first bytes and look
+// for magic. Text-ish and unknown results say "no" — after mid-stream
+// padding, continuation noise must merge, and only a sniffable header is
+// strong evidence of a second attachment.
+function b64StartsNewFile(chars) {
+  if (chars.length < 8) return false;
+  try {
+    const kind = b64Sniff(b64DecodeChars(chars.slice(0, 24)));
+    return !['txt', 'bin', 'xml', 'json', 'html', 'eml'].includes(kind.ext);
+  } catch { return false; }
+}
+
 function b64DecodeChars(chars) {
-  let s = chars.replace(/=+/g, '');
+  // Strip only TRAILING padding; an '=' stuck mid-stream is an OCR misread —
+  // deleting it would shift every later byte by 6 bits, so substitute a
+  // placeholder char instead and keep the rest of the file byte-aligned
+  // (cost: 1–2 wrong bytes at the misread, not a corrupted tail).
+  let s = chars.replace(/=+$/, '').replace(/=/g, 'A');
   if (s.length % 4 === 1) s = s.slice(0, -1);
   s += '='.repeat((4 - s.length % 4) % 4);
   const bin = atob(s);
