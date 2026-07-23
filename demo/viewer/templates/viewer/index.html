@@ -1,0 +1,90 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Recto Demo — read scans, extract attachments</title>
+  <link rel="stylesheet" href="{% static 'viewer/styles.css' %}?v=1">
+</head>
+<body>
+
+  <header id="toolbar">
+    <div class="tb-group">
+      <span id="doc-title" class="doc-title">Recto Demo</span>
+    </div>
+    <div class="tb-group" id="nav-group" hidden>
+      <button id="prev-page" class="tb-btn" title="Previous page">‹</button>
+      <span class="page-indicator"><input id="page-input" type="number" min="1" value="1"><span id="page-count">/ 0</span></span>
+      <button id="next-page" class="tb-btn" title="Next page">›</button>
+      <span class="tb-sep"></span>
+      <button id="zoom-out" class="tb-btn" title="Zoom out">−</button>
+      <span id="zoom-label">100%</span>
+      <button id="zoom-in" class="tb-btn" title="Zoom in">+</button>
+    </div>
+    <div class="tb-group">
+      <button id="open-other" class="tb-btn text-btn" hidden>Open another PDF</button>
+      <input type="file" id="pdf-file" accept="application/pdf" hidden>
+    </div>
+  </header>
+
+  <!-- Landing: drop zone + sample documents -->
+  <section id="landing">
+    <div id="drop-zone">
+      <div class="dz-icon">⤓</div>
+      <h1>Watch OCR find your attachments</h1>
+      <p class="dz-sub">Drop a scanned-email PDF here — the reader runs in your browser,
+        decodes any base64 attachment body it finds, and hands you the files.</p>
+      <button id="upload-btn" class="cta">Choose a PDF</button>
+    </div>
+    {% if samples %}
+    <div id="samples">
+      <h2>…or try a sample</h2>
+      <div id="sample-list">
+        {% for s in samples %}
+        <button class="sample-card" data-name="{{ s.name }}">
+          <span class="sample-icon">▤</span>
+          <span class="sample-name">{{ s.name }}</span>
+          <span class="sample-size">{{ s.size_kb }} KB</span>
+        </button>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- Viewer -->
+  <main id="viewer-container" hidden>
+    <div id="viewer"></div>
+  </main>
+
+  <!-- Attachments panel (right) -->
+  <aside id="att-panel" class="hidden">
+    <div class="att-head">
+      <h2>Attachments</h2>
+      <button id="att-close" class="tb-btn" title="Close">✕</button>
+    </div>
+    <div id="att-status" class="att-status">Waiting for a document…</div>
+    <div id="att-cards">
+      <div id="att-empty" class="att-empty">Attachments found in the document appear here.</div>
+    </div>
+    <div class="att-foot"><button id="att-rescan" class="link-btn">Rescan document</button></div>
+  </aside>
+  <button id="att-toggle" class="hidden" title="Attachments">📎<span id="att-badge" class="hidden">0</span></button>
+
+  <!-- OCR progress pill -->
+  <div id="ocr-pill" class="hidden">
+    <div class="pill-row"><span class="pill-spinner"></span><span id="pill-text">Reading text…</span></div>
+    <div class="pill-bar"><div id="pill-fill"></div></div>
+  </div>
+
+  <!-- OCR engine (served verbatim from ocr_tool/static — synced files) -->
+  <script src="{% static 'ocr_tool/engine/core.js' %}"></script>
+  <script src="{% static 'ocr_tool/engine/ocr.js' %}"></script>
+  <script src="{% static 'ocr_tool/engine/ocr-engine.js' %}"></script>
+  <script src="{% static 'ocr_tool/engine/blindocr.js' %}"></script>
+
+  <script src="{% static 'viewer/demo.js' %}?v=1"></script>
+  <script src="{% static 'viewer/ocr-adapter.js' %}?v=1"></script>
+  <script src="{% static 'viewer/attachments.js' %}?v=1"></script>
+</body>
+</html>
