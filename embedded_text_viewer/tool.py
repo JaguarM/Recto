@@ -10,5 +10,5 @@ class EmbeddedTextViewerTool(PDFTool):
     styles = [{'path': 'embedded_text_viewer/styles.css'}]
     toolbar_button = 'embedded_text_viewer/toolbar_button.html'
     scripts_after_app = [
-        {'path': 'embedded_text_viewer/etv-fetch.js', 'version': 'v=4'},
+        {'path': 'embedded_text_viewer/etv-fetch.js', 'version': 'v=5'},
     ]

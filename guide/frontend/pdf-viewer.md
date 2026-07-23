@@ -1,6 +1,6 @@
 # PDF Viewer — `pdf-viewer.js`
 
-[pdf-viewer.js](https://github.com/JaguarM/Recto/blob/main/pdf_core/static/pdf_core/pdf-viewer.js) handles file uploads and page rendering. It does **not** use PDF.js — pages are rendered from server-extracted base64 PNG images.
+[pdf-viewer.js](https://github.com/JaguarM/Recto/blob/main/pdf_core/static/pdf_core/pdf-viewer.js) handles file uploads and page rendering. It does **not** use PDF.js — each page is an `<img>` whose source is the server-extracted page raster, fetched on demand from `/page-image/<hash>/<n>` (the open response carries no page images, so a two-thousand-page document opens as fast as a two-page one; the browser's HTTP cache keeps revisited pages free).
 
 It injects **no overlays of any kind**. Once the pages are on screen it emits `document:loaded`
 and stops; plugins put their own content on the page from there. A box-creating plugin's boxes
@@ -10,11 +10,14 @@ arrive this way, not from the viewer.
 
 ### `handleFileUpload()`
 
-Triggered when a file is selected or dropped. Sends the file to `POST /open-document`, then:
+Triggered when a file is selected or dropped. Sends the file to `POST /open-document`
+(the one and only upload — the server stores the document by `sha256`), then:
 
-1. Parses the response into `state.pageImages`, `state.numPages`, `state.pageWidth`, `state.pageHeight`
-2. Navigates to page 1
-3. Renders thumbnails
+1. Stores `state.docHash` and fills `state.pageImages` with per-page **URLs**
+   (`/page-image/<hash>/<n>`), plus `state.numPages`, `state.pageWidth`, `state.pageHeight`
+2. Navigates to page 1 (which fetches just that page's raster)
+3. Renders thumbnails — 180 px `?thumb=1` variants with `loading="lazy"`, so only
+   thumbnails scrolled into view are ever fetched
 4. Auto-detects font size and sets `suggested_scale`
 5. Emits `document:loaded` with `{ file, isDefault, fontFamily, sizePt }` — the detected
    typography is passed along so box-creating plugins inherit the document's defaults
@@ -29,7 +32,7 @@ Switches the viewer to display a specific page:
 
 1. Emits `viewer:clear` (plugins tear down per-page state — e.g. `webgl_mask` disposes GL contexts)
 2. Creates a new `page-container` div with CSS custom properties for dimensions
-3. Inserts an `<img>` element with the base64 page image and appends the container to the viewer
+3. Inserts an `<img>` element pointing at that page's `/page-image/<hash>/<n>` URL and appends the container to the viewer
 4. Emits `page:rendered` `{ pageContainer, pageNum }` — plugins draw their overlays (the `webgl_mask` mask canvas, the `text_tool` SVG text layer). **The core itself creates no overlay DOM.**
 5. Emits `pages:refresh` so per-page overlays re-sync
 

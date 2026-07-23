@@ -10,6 +10,12 @@
 // exactly one layer is read, preferring whichever one is visible on screen
 // (the body classes hide-ocr-text / hide-embedded-text that the layer toggles
 // maintain). All access is guarded so removing text_tool never throws.
+//
+// Embedded text lives in utbState only for pages the user has actually
+// visited (the viewer hydrates lazily); the rest of the document's text is
+// read from embedded_text_viewer's span cache (window.etvSpanCache, guarded —
+// it's another plugin), so attachment detection always sees the whole
+// document, not just the pages on screen.
 
 const b64State = {
   blocks: [],     // { data: Uint8Array, mime, ext, pages: [first, last], chars }
@@ -28,7 +34,9 @@ function b64Status(msg) {
 // Pick exactly one text-box layer: the visible one, else whichever exists.
 function b64ActiveLayer() {
   if (typeof utbState === 'undefined') return null;
-  const has = t => utbState.boxes.some(b => b.type === t && (b.text || '').trim());
+  const cachedEmb = !!window.etvSpanCache?.anyText?.();   // text on unvisited pages counts
+  const has = t => utbState.boxes.some(b => b.type === t && (b.text || '').trim()) ||
+    (t === 'embedded' && cachedEmb);
   const hideOcr = document.body.classList.contains('hide-ocr-text');
   const hideEmb = document.body.classList.contains('hide-embedded-text');
   if (has('ocr') && !hideOcr) return 'ocr';
@@ -42,9 +50,20 @@ function b64ActiveLayer() {
 // vertical positions overlap are segments of the same printed line (a
 // redaction split, a tab stop) and are joined left-to-right.
 function b64GatherLines(layerType) {
-  const boxes = utbState.boxes
-    .filter(b => b.type === layerType && !b.ocr?.unread && (b.text || '').trim())
-    .sort((a, b) => (a.page - b.page) || (a.y - b.y) || (a.x - b.x));
+  let source = utbState.boxes
+    .filter(b => b.type === layerType && !b.ocr?.unread && (b.text || '').trim());
+  if (layerType === 'embedded' && window.etvSpanCache) {
+    // Pages never rendered have no boxes — take their spans from the cache.
+    // Hydrated pages stay box-sourced so user edits are what gets scanned.
+    const cache = window.etvSpanCache;
+    for (let p = 1; p <= (state.numPages || 1); p++) {
+      if (cache.isHydrated?.(p) || !cache.hasPage?.(p)) continue;
+      for (const s of cache.spansFor(p) || []) {
+        if ((s.text || '').trim()) source.push(s);
+      }
+    }
+  }
+  const boxes = source.sort((a, b) => (a.page - b.page) || (a.y - b.y) || (a.x - b.x));
   const lines = [];
   let cur = null;
   for (const b of boxes) {
@@ -274,7 +293,11 @@ async function b64AutoScan() {
     if (typeof utbState === 'undefined') return;   // no text_tool, nothing to scan
     const amount = b64TextAmount();
     const ocr = window.OCRTool?.state;
-    if (ocr ? (ocr.autoDone && !ocr.running) : (amount > 0 && amount === prev)) break;
+    const ocrSettled = ocr ? (ocr.autoDone && !ocr.running) : (amount > 0 && amount === prev);
+    // The embedded span cache fills in background chunks — wait for the whole
+    // document's text (the deadline still forces a scan on very slow fetches).
+    const embSettled = !window.etvSpanCache || window.etvSpanCache.complete();
+    if (ocrSettled && embSettled) break;
     prev = amount;
   }
   if (!live() || b64State.scanned) return;   // user beat us to it — leave their result

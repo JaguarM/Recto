@@ -44,11 +44,13 @@ of the stack, so the core never references a plugin by name.
 - **Removing a tool** — delete the folder. The app, its routes, templates, static files, and
   event subscriptions all disappear together, leaving nothing dangling in the core.
 
-The document lifecycle makes the boundary concrete: the core's `/open-document` returns the
-pages and nothing else, then emits `document:loaded`. A plugin that wants to analyse the
-document listens for that event and calls its own endpoint. `webgl_mask` is the reference
-example — it posts the file to `/webgl/masks` and drops the overlays it gets back onto the
-page. Delete it, and the core is unchanged: it never knew the plugin existed.
+The document lifecycle makes the boundary concrete: the core's `/open-document` stores the
+file by content hash and returns metadata and nothing else; pages are served one at a time
+from `/page-image/<hash>/<n>`, and the frontend emits `document:loaded`. A plugin that wants
+to analyse the document listens for that event and calls its own endpoint with the hash.
+`webgl_mask` is the reference example — it fetches `/webgl/mask/<hash>/<n>` for each page it
+overlays, re-uploading nothing. Delete it, and the core is unchanged: it never knew the
+plugin existed.
 
 ## Navigation
 

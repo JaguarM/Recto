@@ -1,8 +1,11 @@
 /* =========================================================
       PDF Viewer — single-page, PNG-based (no PDF.js)
-      The server extracts the original 816×1056 px embedded
-      image and returns it as base64.  All coordinates are in
-      that pixel space throughout.
+      The server stores the opened document by content hash and
+      serves each page's original 816×1056 px embedded image on
+      demand from /page-image/<hash>/<n> — the open response is
+      metadata only, so huge documents open instantly and the
+      browser only ever holds the pages it shows. All
+      coordinates are in that pixel space throughout.
       ========================================================= */
 
 // Maps a .ttf filename (from the server) to the CSS font family name used in
@@ -26,13 +29,16 @@ async function loadDocument(data, file) {
     utbState.reset();
     if (typeof clearAllSVGLayers === 'function') clearAllSVGLayers();
   }
-  const imgType = data.page_image_type || 'image/png';
-  state.pageImages = (data.page_images || []).map(b64 => b64 ? `data:${imgType};base64,${b64}` : null);
-  state.maskImages = (data.mask_images || []).map(b64 => b64 ? `data:image/png;base64,${b64}` : null);
-  state.numPages = data.num_pages || state.pageImages.length || 1;
+  state.numPages = data.num_pages || 1;
   state.pageWidth = data.page_width || GEO.PAGE_WIDTH_PX;
   state.pageHeight = data.page_height || GEO.PAGE_HEIGHT_PX;
   state.docHash = data.sha256 || null;
+  // Per-page raster URLs — the browser fetches (and caches) a page only when
+  // something shows it: the viewer, a thumbnail scrolled into view, an OCR
+  // pass reading that page. Same bytes the old inline payload carried.
+  state.pageImages = state.docHash
+    ? Array.from({ length: state.numPages }, (_, i) => `/page-image/${state.docHash}/${i + 1}`)
+    : [];
 
   els.pageCountElem.textContent = `/ ${state.numPages}`;
   els.pageInputElem.value = 1;

@@ -12,35 +12,35 @@
 | `page:rendered` | **creates** the `.webgl-overlay` `<canvas>` for that page and appends it (the core no longer owns this DOM), then `setupWebGLOverlay(...)` |
 | `pages:refresh` | `refreshWebGLCanvases()` |
 | `viewer:clear` | `clearWebGLContexts()` |
-| `document:loaded` | `fetchMasksAsync(file, isDefault)` |
+
+There is no `document:loaded` work: masks are fetched per page when a page's overlay
+initializes, and the blob cache invalidates itself the moment `state.docHash` changes.
 
 ## Architecture
 
 ```
-document:loaded event  →  fetchMasksAsync(file, isDefault)
+page becomes visible (IntersectionObserver)  →  initWebGLOverlay(canvas, pageNum)
     ↓
-POST /webgl/masks
+GET /webgl/mask/<state.docHash>/<pageNum>   (200 = mask PNG, 204 = no redactions)
     ↓
-`state.maskImages` populated with all base64 masks
+maskBlobCache: pageNum → Blob | null, kept for the whole document
     ↓
-`refreshWebGLCanvases()`
+Two textures: uPage (RGBA, LINEAR) + uMask (LUMINANCE, NEAREST)
     ↓
-`initWebGLOverlay()` (for visible pages via IntersectionObserver)
-    ↓
-Two LUMINANCE textures: uPage (LINEAR) + uMask (NEAREST)
-    ↓
-Fragment shader: multiplicative alpha recovery → grayscale output
+Fragment shader: multiplicative alpha recovery
     ↓
 CSS mix-blend-mode: normal — canvas composited directly over PDF
 ```
 
+The document itself was stored server-side at open time (keyed by `sha256`), so this
+plugin never re-uploads anything — one small GET per page, cached immutably by the
+browser and in `maskBlobCache` (a `null` entry remembers "no mask here" so page
+revisits skip the server entirely).
+
 ## Functions
 
-### `fetchMasksAsync(file, isDefault)`
-Asynchronously requests all masks from `/webgl/masks`. Stores results in `state.maskImages` and calls `refreshWebGLCanvases()`.
-
 ### `setupWebGLOverlay(pageContainer, canvas, pageNum)`
-Registers a page container with the `IntersectionObserver`. When a page becomes visible, `initWebGLOverlay(canvas, pageNum)` is called. Pages with no mask data are skipped until `refreshWebGLCanvases()` triggers after async load.
+Registers a page container with the `IntersectionObserver`. When a page becomes visible, `initWebGLOverlay(canvas, pageNum)` is called, which fetches that page's mask on demand.
 
 **Texture setup:**
 - Format: `gl.LUMINANCE` (single-channel grayscale)

@@ -19,14 +19,14 @@ On Windows, `run_app.bat` does install + runserver + opens the browser. `setup.s
 
 ## Architecture: core + plugins, two registries
 
-The dividing line is strict: **`pdf_core` opens the document, rasterizes pages, extracts embedded text/typography, and runs no analysis.** Every feature beyond that is a plugin — an independent Django app whose folder can be deleted with no dangling references. Full docs live in `guide/` (start with `guide/architecture/architecture-overview.md` and `guide/tool-expansion-guide.md`).
+The dividing line is strict: **`pdf_core` opens the document (storing it server-side keyed by sha256 — `pdf_core/logic/document_store.py`), reports its typography, serves page rasters one at a time (`/page-image/<hash>/<n>`), and runs no analysis.** The open payload is metadata only; nothing ships the whole document to the browser, which is what lets multi-thousand-page files open in seconds. Every feature beyond that is a plugin — an independent Django app whose folder can be deleted with no dangling references. Full docs live in `guide/` (start with `guide/architecture/architecture-overview.md` and `guide/tool-expansion-guide.md`).
 
 Decoupling happens on both ends of the stack:
 
 - **Backend — `@register_tool` registry** (`pdf_core/registry.py`): each plugin's `tool.py` defines a `PDFTool` subclass (`pdf_core/base.py`) declaring its toolbar button, options/ribbon bars, sidebar, scripts, styles, and URL module. `recto/urls.py` and `pdf_core/templates/pdf_core/index.html` iterate the registry — **never edit `index.html`, `recto/urls.py`, or `settings.py` to add a plugin.** `settings.py` auto-appends to `INSTALLED_APPS` any top-level folder containing an `apps.py`; the plugin's `apps.py` `ready()` imports `tool.py` to trigger registration.
 - **Frontend — `PDFHooks` event bus** (`pdf_core/static/pdf_core/hooks.js`, loaded before all other scripts): the core viewer emits lifecycle events (`ui:ready`, `viewer:clear`, `page:rendered`, `pages:refresh`, `document:loaded`, `zoom:changed`); plugins subscribe with `PDFHooks.on(...)`. The core never calls a plugin function by name. Handlers may be async and a throwing handler can't break the core.
 
-Analysis is a second, plugin-owned pass: plugins listen for `document:loaded`, re-post `state.currentFile` to their own endpoint, and draw their own overlays.
+Analysis is a second, plugin-owned pass: plugins listen for `document:loaded` (and `page:rendered`), call their own endpoints with `state.docHash` — the server reads its stored copy; the file is never re-uploaded — and draw their own overlays. Prefer per-page endpoints over whole-document passes so huge documents stay cheap.
 
 ### Baseline apps
 

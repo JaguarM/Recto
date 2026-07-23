@@ -113,7 +113,8 @@ Certbot will modify the Nginx config to add HTTPS listeners and auto-renew certi
 | Static files 404 | Run `python manage.py collectstatic --noinput`, check Nginx `alias` path |
 | Permission denied on socket | `sudo chown -R www-data:www-data /var/www/recto` |
 | Font widths are wrong | Ensure `assets/fonts/` contains the `.ttf` files and `fc-cache -fv` was run |
-| Upload too large | `DATA_UPLOAD_MAX_MEMORY_SIZE` in `settings.py` defaults to 50 MB |
+| Upload too large | File uploads stream to disk and are not size-capped by Django (`DATA_UPLOAD_MAX_MEMORY_SIZE` only limits non-file form data) — check Nginx `client_max_body_size` instead |
+| Disk filling up | Opened documents are cached in `media/doc_cache/` (LRU, `MAX_DOCS` in `pdf_core/logic/document_store.py`) |
 
 ## Updating
 

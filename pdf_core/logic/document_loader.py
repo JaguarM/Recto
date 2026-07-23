@@ -1,25 +1,40 @@
 """Open a document and describe it — the core's only ingestion path.
 
-This module knows how to turn a PDF or a raw image into the payload the viewer
-needs to render it: one raster per page, the page geometry, the embedded text
-spans, and the document's typography. It deliberately knows nothing about what
-any plugin will *do* with that document. Analysis of any kind belongs to a
-plugin, which layers itself on top via the ``document:loaded`` hook.
+This module knows how to describe a stored PDF or raw image to the viewer
+(page count, geometry, typography) and how to produce any single page's
+raster on demand. It deliberately knows nothing about what any plugin will
+*do* with that document. Analysis of any kind belongs to a plugin, which
+layers itself on top via the ``document:loaded`` hook.
+
+Documents are read from the path the document store saved them to
+(``document_store``); nothing here holds a whole document in memory. The open
+payload carries only metadata — page images are served one at a time by the
+``/page-image`` endpoint via :func:`page_image_bytes`.
 
 Coordinates follow ``pdf_core.logic.geometry``: everything the frontend touches
 is in image pixel space (96 DPI), while font sizes stay in points.
 """
 
-import base64
 from collections import Counter
 from io import BytesIO
 
-import cv2
 import fitz
-import numpy as np
 from PIL import Image
 
 from . import geometry as geo
+
+# Typography metadata (suggested body size) is sampled from the first pages —
+# enough signal on any real document, and it keeps opening a multi-thousand-
+# page file fast. Declared fonts are still collected from every page (cheap).
+_SPAN_SAMPLE_PAGES = 25
+
+_THUMB_WIDTH = 180  # px — matches the thumbnail sidebar's rendered width
+
+_IMAGE_MIMES = {
+    '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+    '.tif': 'image/tiff', '.tiff': 'image/tiff', '.bmp': 'image/bmp',
+    '.webp': 'image/webp',
+}
 
 
 def crop_to_page_ratio(img_bytes):
@@ -49,43 +64,55 @@ def crop_to_page_ratio(img_bytes):
     return img_bytes
 
 
+def _first_raster(doc, page_index):
+    """The first usable embedded raster on one page of an open PyMuPDF ``doc``.
+
+    Returns ``(page_num, page, xref, img_bytes, img_w, img_h, img_rect)`` or
+    None. The cropping here is the contract every raster consumer shares —
+    identical pixels for the viewer, OCR, and mask analysis.
+    """
+    page = doc[page_index]
+    page_num = page_index + 1
+    try:
+        image_list = doc.get_page_images(page_index)
+    except Exception as e:
+        print(f"Error extracting images on page {page_num}: {e}")
+        return None
+
+    for img_info in image_list:
+        xref = img_info[0]
+        try:
+            base_image = doc.extract_image(xref)
+            if not base_image:
+                continue
+            if base_image.get("ext", "").lower() not in ("png", "tiff", "tif"):
+                continue
+
+            img_bytes = crop_to_page_ratio(base_image["image"])
+            with Image.open(BytesIO(img_bytes)) as pil_img:
+                img_w, img_h = pil_img.size
+
+            image_rects = page.get_image_rects(xref)
+            img_rect = image_rects[0] if image_rects else None
+
+            return page_num, page, xref, img_bytes, img_w, img_h, img_rect
+        except Exception as e:
+            print(f"Error processing image xref {xref} on page {page_num}: {e}")
+    return None
+
+
 def iter_page_rasters(doc):
-    """Yield ``(page_num, xref, img_bytes, img_w, img_h, img_rect)`` for the first
-    usable embedded raster on each page of an open PyMuPDF ``doc``.
+    """Yield ``(page_num, page, xref, img_bytes, img_w, img_h, img_rect)`` for
+    the first usable embedded raster on each page of an open PyMuPDF ``doc``.
 
     Shared by the loader and by any plugin that needs to analyse the *same*
     pixels the user is looking at — going through here guarantees identical
     cropping, so a plugin's coordinates line up with the rendered page.
     """
     for page_index in range(len(doc)):
-        page = doc[page_index]
-        page_num = page_index + 1
-        try:
-            image_list = doc.get_page_images(page_index)
-        except Exception as e:
-            print(f"Error extracting images on page {page_num}: {e}")
-            continue
-
-        for img_info in image_list:
-            xref = img_info[0]
-            try:
-                base_image = doc.extract_image(xref)
-                if not base_image:
-                    continue
-                if base_image.get("ext", "").lower() not in ("png", "tiff", "tif"):
-                    continue
-
-                img_bytes = crop_to_page_ratio(base_image["image"])
-                with Image.open(BytesIO(img_bytes)) as pil_img:
-                    img_w, img_h = pil_img.size
-
-                image_rects = page.get_image_rects(xref)
-                img_rect = image_rects[0] if image_rects else None
-
-                yield page_num, page, xref, img_bytes, img_w, img_h, img_rect
-                break  # one raster per page — the first usable one wins
-            except Exception as e:
-                print(f"Error processing image xref {xref} on page {page_num}: {e}")
+        found = _first_raster(doc, page_index)
+        if found:
+            yield found
 
 
 def _suggested_size(spans):
@@ -105,33 +132,32 @@ def _suggested_size(spans):
     return Counter(sizes).most_common(1)[0][0] if sizes else 12.0
 
 
-def load_pdf(pdf_bytes):
-    """Render a PDF and describe it.
+def load_pdf_meta(path):
+    """Describe a stored PDF without rasterizing it.
 
     Returns::
 
         {
-            "page_images":     [base64 PNG, one per page],
             "page_image_type": "image/png",
             "page_width":      int,   # image px
             "page_height":     int,   # image px
             "num_pages":       int,
-            "spans":           [ {"page", "text", "bbox", "font": {...}} ],
             "pdf_fonts":       [basefont, ...],   # most-used first
             "suggested_scale": int,   # px-per-pt as a percentage
             "suggested_size":  float, # body-text size in points
         }
+
+    Page rasters are served per page by :func:`page_image_bytes`; embedded
+    text spans belong to the plugins that read them.
     """
     try:
-        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        doc = fitz.open(str(path))
     except Exception as e:
-        print(f"Error opening PDF stream: {e}")
-        return {"error": str(e), "spans": []}
+        print(f"Error opening PDF file: {e}")
+        return {"error": str(e)}
 
-    text_spans = []
-    page_images = {}      # page_num -> base64 PNG
     pdf_font_pages = {}   # basefont -> number of pages it appears on
-    page_scale_ratio = None  # img_px / page_pt, from the first placed raster
+    sample_spans = []
 
     for page_index in range(len(doc)):
         page = doc[page_index]
@@ -146,71 +172,133 @@ def load_pdf(pdf_bytes):
         except Exception as e:
             print(f"Error collecting declared fonts on page {page_num}: {e}")
 
-        # Embedded text spans — what the embedded-text plugins read.
-        try:
-            page_dict = page.get_text("dict")
-            for block in page_dict.get("blocks", []):
-                if block.get("type") != 0:  # text blocks only
-                    continue
-                for line in block.get("lines", []):
-                    for span in line.get("spans", []):
-                        text_spans.append({
-                            "page": page_num,
-                            "text": span.get("text", "").strip(),
-                            "bbox": span.get("bbox"),
-                            "font": {
-                                "size": span.get("size", 0),
-                                "flags": span.get("flags", 0),
-                                "matched_font": span.get("font", "unknown"),
-                            },
-                        })
-        except Exception as e:
-            print(f"Error extracting text spans on page {page_num}: {e}")
+        # Body-size sample — the leading pages are plenty.
+        if page_index < _SPAN_SAMPLE_PAGES:
+            try:
+                page_dict = page.get_text("dict")
+                for block in page_dict.get("blocks", []):
+                    if block.get("type") != 0:
+                        continue
+                    for line in block.get("lines", []):
+                        for span in line.get("spans", []):
+                            sample_spans.append({
+                                "text": span.get("text", "").strip(),
+                                "font": {"size": span.get("size", 0)},
+                            })
+            except Exception as e:
+                print(f"Error sampling text spans on page {page_num}: {e}")
 
-    # Page rasters + the pt->px scale, from the same cropped pixels plugins see.
-    for page_num, _page, _xref, img_bytes, img_w, _img_h, img_rect in iter_page_rasters(doc):
-        page_images[page_num] = base64.b64encode(img_bytes).decode()
-        if page_scale_ratio is None and img_rect is not None and img_rect.width > 0:
-            page_scale_ratio = img_w / img_rect.width
+    # The pt->px scale, from the first placed raster (same pixels the viewer gets).
+    page_scale_ratio = None
+    for page_index in range(len(doc)):
+        found = _first_raster(doc, page_index)
+        if found:
+            _num, _page, _xref, _img_bytes, img_w, _img_h, img_rect = found
+            if img_rect is not None and img_rect.width > 0:
+                page_scale_ratio = img_w / img_rect.width
+            break
 
     ratio = page_scale_ratio if page_scale_ratio is not None else geo.PT_TO_PX
     num_pages = len(doc)
     doc.close()
 
     return {
-        "page_images": [page_images.get(i + 1) for i in range(num_pages)],
         "page_image_type": "image/png",
         "page_width": geo.PAGE_WIDTH_PX,
         "page_height": geo.PAGE_HEIGHT_PX,
         "num_pages": num_pages,
-        "spans": text_spans,
         "pdf_fonts": sorted(pdf_font_pages, key=pdf_font_pages.get, reverse=True),
         "suggested_scale": round(100 * ratio),
-        "suggested_size": _suggested_size(text_spans),
+        "suggested_size": _suggested_size(sample_spans),
     }
 
 
-def load_image(image_bytes, mime_type="image/png"):
-    """Describe a raw image (PNG, JPEG, TIFF, …) as a one-page document.
+def load_image_meta(path):
+    """Describe a stored raw image (PNG, JPEG, TIFF, …) as a one-page document.
 
-    Same shape as :func:`load_pdf`, minus the text spans an image cannot have.
+    Same shape as :func:`load_pdf_meta`, minus the typography an image cannot
+    declare.
     """
     try:
-        img = cv2.imdecode(np.frombuffer(image_bytes, np.uint8), cv2.IMREAD_COLOR)
-        if img is None:
-            return {"error": "Could not decode image", "spans": []}
-
-        img_h, img_w = img.shape[:2]
+        with Image.open(str(path)) as img:
+            img_w, img_h = img.size
         return {
-            "page_images": [base64.b64encode(image_bytes).decode()],
-            "page_image_type": mime_type,
+            "page_image_type": _IMAGE_MIMES.get(path.suffix.lower(), 'image/png'),
             "page_width": img_w,
             "page_height": img_h,
             "num_pages": 1,
-            "spans": [],
             "pdf_fonts": [],
             "suggested_scale": geo.DEFAULT_SCALE,
             "suggested_size": 12.0,
         }
     except Exception as e:
-        return {"error": str(e), "spans": []}
+        return {"error": str(e)}
+
+
+def page_image_bytes(path, page_num, thumb=False):
+    """One page's raster from a stored document, on demand.
+
+    Returns ``(bytes, mime)`` or None when the page doesn't exist. For PDFs
+    this is the same cropped embedded raster the old inline payload carried —
+    identical pixels, so every coordinate consumer stays aligned. Pages with
+    no usable embedded raster fall back to a 96-DPI render of the page, which
+    lands in the same pixel space by construction (96/72 px per pt).
+
+    ``thumb`` returns a small PNG (180 px wide) for the thumbnail sidebar.
+    """
+    path = str(path)
+    if path.lower().endswith('.pdf'):
+        if thumb:
+            full = page_image_bytes(path, page_num, thumb=False)
+            return (_thumbnail(full[0]), 'image/png') if full else None
+        try:
+            doc = fitz.open(path)
+        except Exception as e:
+            print(f"Error opening PDF file: {e}")
+            return None
+        try:
+            if page_num < 1 or page_num > len(doc):
+                return None
+            found = _first_raster(doc, page_num - 1)
+            if found:
+                return found[3], 'image/png'
+            # No embedded raster (born-digital or unsupported encoding):
+            # render the page at the canonical 96 DPI instead of showing nothing.
+            pix = doc[page_num - 1].get_pixmap(matrix=fitz.Matrix(geo.PT_TO_PX, geo.PT_TO_PX))
+            return pix.tobytes("png"), 'image/png'
+        except Exception as e:
+            print(f"Error rendering page {page_num}: {e}")
+            return None
+        finally:
+            doc.close()
+
+    # Raw image document — one page, served as stored.
+    if page_num != 1:
+        return None
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return None
+    if thumb:
+        return _thumbnail(data), 'image/png'
+    mime = _IMAGE_MIMES.get(path[path.rfind('.'):].lower(), 'image/png')
+    return data, mime
+
+
+def _thumbnail(img_bytes):
+    """Downscale a page raster to the sidebar's width; falls back to the input."""
+    try:
+        with Image.open(BytesIO(img_bytes)) as pil_img:
+            if pil_img.mode not in ("RGB", "L"):
+                pil_img = pil_img.convert("RGB")
+            w, h = pil_img.size
+            if w > _THUMB_WIDTH:
+                pil_img = pil_img.resize(
+                    (_THUMB_WIDTH, max(1, round(h * _THUMB_WIDTH / w))), Image.LANCZOS)
+            out = BytesIO()
+            pil_img.save(out, format="PNG")
+            return out.getvalue()
+    except Exception as e:
+        print(f"Error building thumbnail: {e}")
+        return img_bytes

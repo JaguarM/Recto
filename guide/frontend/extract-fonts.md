@@ -13,8 +13,8 @@ pre-configured on every PDF load.
 
 ```
 POST /open-document
-  └── load_pdf()                # pdf_core.logic.document_loader
-        └── extracts text_spans  # PyMuPDF span data, one entry per text run
+  └── load_pdf_meta()           # pdf_core.logic.document_loader
+        └── samples text_spans   # PyMuPDF span data from the leading pages
   └── detect_dominant_font()     # text_tool.logic.extract_fonts   ← this module
         └── returns font_file, font_size, pdf_font_name
   └── JsonResponse

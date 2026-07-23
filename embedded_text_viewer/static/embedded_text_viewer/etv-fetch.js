@@ -1,105 +1,208 @@
-// etv-fetch.js — Embedded Text Viewer: span fetching and lifecycle hooks.
+// etv-fetch.js — Embedded Text Viewer: chunked span fetching and lifecycle hooks.
 // Cross-module calls into text_tool (utbState, spanToUnified, renderAllTextLayers, etc.)
-// only happen inside event handlers and timeouts, so the fact that text_tool scripts
-// load after this one is safe.
+// only happen inside event handlers and async continuations, so the fact that
+// text_tool scripts load after this one is safe.
+//
+// Two tiers keep huge documents affordable:
+//   1. A background loop fetches LEAN spans (?lean=1 — text, geometry, size,
+//      font; no per-character data) for every page in fixed chunks. This is
+//      the whole document's text at roughly a tenth of the full payload —
+//      enough for anything that *scans* text (base64_tool, the OCR layer
+//      comparison) via window.etvSpanCache.
+//   2. FULL spans (with per-character positions) are fetched one page at a
+//      time, the moment that page is rendered, and turned straight into
+//      UnifiedTextBoxes ("hydration"). Boxes therefore exist only for pages
+//      the user has visited — memory follows behavior, not document size.
+
+const ETV_CHUNK_FIRST = 12;   // small first chunk: quick coverage of the opening pages
+const ETV_CHUNK = 100;        // steady-state pages per background request
 
 const _utbFetchState = {
-  fetched: false,
-  currentFile: null,
+  fetched: false,        // every page's lean spans are cached for this document
+  pagesHash: null,       // state.docHash the cache belongs to
+  pages: new Map(),      // page -> JSON string of that page's LEAN spans
+  hydrated: new Set(),   // pages whose full boxes currently exist in utbState
+  inflight: new Set(),   // request keys ("lean:<start>" / "full:<page>") in the air
+  basePt: null,          // document body size, from the first non-empty batch
+  baseApplied: false,    // one-time font-select sync + redaction renorm ran
+  anyText: false,        // at least one cached page has embedded text
 };
 
-async function utbFetchSpans(file) {
-  if (_utbFetchState.fetched && _utbFetchState.currentFile === file) return;
+// Fixed chunk grid so background requests never overlap: [1..12], [13..112], …
+function etvChunkStart(p) {
+  return p <= ETV_CHUNK_FIRST
+    ? 1
+    : ETV_CHUNK_FIRST + 1 + Math.floor((p - ETV_CHUNK_FIRST - 1) / ETV_CHUNK) * ETV_CHUNK;
+}
+function etvChunkCount(start) { return start === 1 ? ETV_CHUNK_FIRST : ETV_CHUNK; }
 
-  try {
-    let resp;
-    if (file) {
-      const fd = new FormData();
-      fd.append('file', file);
-      resp = await fetch('/embedded-text-viewer/api/extract-spans', { method: 'POST', body: fd });
-    } else {
-      resp = await fetch('/embedded-text-viewer/api/extract-spans');
-    }
-    if (!resp.ok) return;
+function etvCacheValid() { return _utbFetchState.pagesHash === state.docHash; }
 
-    const data = await resp.json();
-    const spans = data.spans || [];
+function etvChunkCached(start, count) {
+  const last = Math.min(start + count - 1, state.numPages || 1);
+  for (let p = start; p <= last; p++) {
+    if (!_utbFetchState.pages.has(p)) return false;
+  }
+  return true;
+}
 
-    if (spans.length > 0) {
-      // Font size is in POINTS (the canonical unit); normalize sizePt directly.
-      const ptSizes = spans.map(s => s.sizePt).sort((a, b) => a - b);
-      const medianPt = ptSizes[Math.floor(ptSizes.length / 2)];
-      const documentBasePt = Math.round(medianPt);
+function etvLeanOf(span) {
+  return { page: span.page, text: span.text, x: span.x, y: span.y,
+           w: span.w, h: span.h, sizePt: span.sizePt, font: span.font };
+}
 
-      const fontCounts = {};
-      let maxCount = 0;
-      let mostUsedFont = 'Times New Roman';
+// ── Normalization (was: the single-shot fetch's preamble) ─────
+// The document's body size is the median of the first non-empty batch — a
+// stable sample — and every later batch snaps to it, so all batches agree.
 
-      spans.forEach(span => {
-        const pt = span.sizePt;
-        let normalizedPt;
-        if (Math.abs(pt - documentBasePt) <= 1.0) {
-          normalizedPt = documentBasePt;
-        } else {
-          normalizedPt = Math.round(pt);
-        }
-        span.sizePt = normalizedPt;
+function etvNormalize(spans) {
+  if (!spans.length) return;
 
-        const f = typeof normUtbFont === 'function' ? normUtbFont(span.font) : (span.font || 'Times New Roman');
-        if (f) {
-          fontCounts[f] = (fontCounts[f] || 0) + 1;
-          if (fontCounts[f] > maxCount) {
-            maxCount = fontCounts[f];
-            mostUsedFont = f;
-          }
-        }
-      });
+  if (_utbFetchState.basePt === null) {
+    const ptSizes = spans.map(s => s.sizePt).sort((a, b) => a - b);
+    _utbFetchState.basePt = Math.round(ptSizes[Math.floor(ptSizes.length / 2)]);
+  }
+  const documentBasePt = _utbFetchState.basePt;
 
-      const fabricSel = document.getElementById('fabric-font-family');
-      if (fabricSel && Array.from(fabricSel.options).find(o => o.value === mostUsedFont)) {
-        fabricSel.value = mostUsedFont;
-        if (typeof textOptions !== 'undefined') textOptions.fontFamily = mostUsedFont;
+  const fontCounts = {};
+  let maxCount = 0;
+  let mostUsedFont = 'Times New Roman';
+
+  spans.forEach(span => {
+    const pt = span.sizePt;
+    span.sizePt = Math.abs(pt - documentBasePt) <= 1.0 ? documentBasePt : Math.round(pt);
+
+    const f = typeof normUtbFont === 'function' ? normUtbFont(span.font) : (span.font || 'Times New Roman');
+    if (f) {
+      fontCounts[f] = (fontCounts[f] || 0) + 1;
+      if (fontCounts[f] > maxCount) {
+        maxCount = fontCounts[f];
+        mostUsedFont = f;
       }
+    }
+  });
 
-      utbState.boxes.filter(b => b.type === 'redaction').forEach(box => {
-        const pt = box.sizePt;
-        let normalizedPt;
-        if (Math.abs(pt - documentBasePt) <= 1.0) {
-          normalizedPt = documentBasePt;
-        } else {
-          normalizedPt = Math.round(pt);
-        }
+  if (_utbFetchState.baseApplied) return;
+  _utbFetchState.baseApplied = true;
 
-        let changed = false;
-        if (box.sizePt !== normalizedPt) {
-          box.sizePt = normalizedPt;
-          changed = true;
-        }
-        if (box.fontFamily !== mostUsedFont) {
-          box.fontFamily = mostUsedFont;
-          changed = true;
-        }
+  const fabricSel = document.getElementById('fabric-font-family');
+  if (fabricSel && Array.from(fabricSel.options).find(o => o.value === mostUsedFont)) {
+    fabricSel.value = mostUsedFont;
+    if (typeof textOptions !== 'undefined') textOptions.fontFamily = mostUsedFont;
+  }
 
-        if (changed && typeof renderBox === 'function') renderBox(box);
-      });
+  if (typeof utbState === 'undefined') return;
+  utbState.boxes.filter(b => b.type === 'redaction').forEach(box => {
+    const pt = box.sizePt;
+    const normalizedPt = Math.abs(pt - documentBasePt) <= 1.0 ? documentBasePt : Math.round(pt);
+
+    let changed = false;
+    if (box.sizePt !== normalizedPt) {
+      box.sizePt = normalizedPt;
+      changed = true;
+    }
+    if (box.fontFamily !== mostUsedFont) {
+      box.fontFamily = mostUsedFont;
+      changed = true;
     }
 
-    utbState.boxes = utbState.boxes.filter(b => b.type !== 'embedded');
+    if (changed && typeof renderBox === 'function') renderBox(box);
+  });
+}
+
+// ── Lean cache (whole document) ───────────────────────────────
+
+function etvCacheChunk(spans, start, count) {
+  const byPage = new Map();
+  for (const s of spans) {
+    if (!byPage.has(s.page)) byPage.set(s.page, []);
+    byPage.get(s.page).push(s);
+  }
+  const last = Math.min(start + count - 1, state.numPages || 1);
+  for (let p = start; p <= last; p++) {
+    if (!_utbFetchState.pages.has(p)) {
+      _utbFetchState.pages.set(p, JSON.stringify(byPage.get(p) || []));
+    }
+  }
+  if (spans.length) _utbFetchState.anyText = true;
+  if (!_utbFetchState.fetched && etvChunkCached(1, state.numPages || 1)) {
+    _utbFetchState.fetched = true;
+  }
+}
+
+async function etvFetchLeanChunk(hash, start, count) {
+  const key = `lean:${start}`;
+  if (_utbFetchState.inflight.has(key)) return;
+  _utbFetchState.inflight.add(key);
+  try {
+    const resp = await fetch(
+      `/embedded-text-viewer/api/extract-spans?hash=${hash}&start=${start}&count=${count}&lean=1`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    // A batch is valid iff it belongs to the document on screen — the hash is
+    // the identity, so even a slow response for a re-opened document is good.
+    if (hash !== state.docHash || !etvCacheValid()) return;
+    const spans = data.spans || [];
+    etvNormalize(spans);
+    etvCacheChunk(spans, start, count);
+  } catch (err) {
+    console.warn('UTB: lean span fetch error', err);
+  } finally {
+    _utbFetchState.inflight.delete(key);
+  }
+}
+
+async function utbFetchSpans() {
+  const hash = state.docHash;
+  if (!hash) return;
+
+  for (let p = 1; p <= (state.numPages || 1) && hash === state.docHash;) {
+    const start = etvChunkStart(p);
+    const count = etvChunkCount(start);
+    if (!etvChunkCached(start, count)) await etvFetchLeanChunk(hash, start, count);
+    p = start + count;
+  }
+}
+
+// ── Hydration (per rendered page) ─────────────────────────────
+
+function etvHydratePage(pageNum) {
+  if (!etvCacheValid() || _utbFetchState.hydrated.has(pageNum)) return;
+  if (typeof utbState === 'undefined') return;
+  etvFetchFull(pageNum);   // async — boxes appear when the spans arrive
+}
+
+async function etvFetchFull(pageNum) {
+  const key = `full:${pageNum}`;
+  if (_utbFetchState.inflight.has(key)) return;
+  _utbFetchState.inflight.add(key);
+  const hash = state.docHash;
+  try {
+    if (!hash) return;
+    const resp = await fetch(
+      `/embedded-text-viewer/api/extract-spans?hash=${hash}&start=${pageNum}&count=1`);
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (hash !== state.docHash || !etvCacheValid()) return;
+    if (_utbFetchState.hydrated.has(pageNum)) return;
+
+    const spans = data.spans || [];
+    etvNormalize(spans);
+    _utbFetchState.hydrated.add(pageNum);
+    // The lean tier can learn this page from the full response too.
+    if (!_utbFetchState.pages.has(pageNum)) {
+      etvCacheChunk(spans.map(etvLeanOf), pageNum, 1);
+    }
+    if (!spans.length || typeof utbState === 'undefined') return;
 
     spans.forEach(span => utbState.addBox(spanToUnified(span)));
-
-    _utbFetchState.fetched = true;
-    _utbFetchState.currentFile = file;
-
     renderAllTextLayers();
     utbConnectRedactionsToLines();
-
-    if (typeof calculateAllWidths === 'function') {
-      calculateAllWidths();
-    }
-
+    if (typeof calculateAllWidths === 'function') calculateAllWidths();
   } catch (err) {
     console.warn('UTB: span fetch error', err);
+  } finally {
+    _utbFetchState.inflight.delete(key);
   }
 }
 
@@ -212,14 +315,55 @@ window.addEmbeddedTextSpan = function (pageNum, x, y) {
 };
 
 
+// ── Cross-plugin text access ──────────────────────────────────
+// Read-only view of the lean span cache for plugins that scan the whole
+// document's text (base64_tool, the OCR layer comparison). Pages the user
+// visited live in utbState (with any edits); this covers everything else.
+
+window.etvSpanCache = {
+  complete() { return etvCacheValid() && _utbFetchState.fetched; },
+  anyText() { return etvCacheValid() && _utbFetchState.anyText; },
+  hasPage(p) { return etvCacheValid() && _utbFetchState.pages.has(p); },
+  isHydrated(p) { return etvCacheValid() && _utbFetchState.hydrated.has(p); },
+  // Lean spans: { page, text, x, y, w, h, sizePt, font }.
+  spansFor(p) {
+    if (!this.hasPage(p)) return null;
+    return JSON.parse(_utbFetchState.pages.get(p));
+  },
+};
+
+
 // ── Lifecycle hooks ───────────────────────────────────────────
 // Subscribe to the core's document lifecycle instead of monkey-patching
 // window.loadDocument. The core already resets utbState and the SVG layers at
-// the top of loadDocument, so this handler only (re)fetches the embedded spans.
+// the top of loadDocument, so these handlers only manage the span cache.
 if (window.PDFHooks) {
-  PDFHooks.on('document:loaded', ({ file }) => {
-    _utbFetchState.fetched = false;
-    utbFetchSpans(file);
+  PDFHooks.on('document:loaded', () => {
+    // Boxes were reset by the core, so every page needs hydrating again; the
+    // cached lean spans survive only when it's the same document (same hash).
+    _utbFetchState.hydrated.clear();
+    if (!etvCacheValid()) {
+      _utbFetchState.pagesHash = state.docHash;
+      _utbFetchState.pages.clear();
+      _utbFetchState.inflight.clear();
+      _utbFetchState.fetched = false;
+      _utbFetchState.basePt = null;
+      _utbFetchState.baseApplied = false;
+      _utbFetchState.anyText = false;
+    }
+    // Kick the background lean loop and hydrate whatever is on screen.
+    // Deliberately not awaited — loadDocument must not block on text.
+    utbFetchSpans();
+    document.querySelectorAll('.page-container').forEach(c => {
+      etvHydratePage(parseInt(c.id.replace('pageContainer', '')));
+    });
+  });
+
+  // Rendering a page is the demand signal for its full spans. (For a page
+  // rendered before document:loaded lands — the initial page — the cache
+  // isn't valid yet; the document:loaded handler above catches it.)
+  PDFHooks.on('page:rendered', ({ pageNum }) => {
+    etvHydratePage(pageNum);
   });
 }
 

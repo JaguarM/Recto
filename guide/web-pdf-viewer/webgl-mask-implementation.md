@@ -22,15 +22,19 @@ The pipeline begins by analyzing raw PDF bytes using `fitz` (PyMuPDF).
 
 ## 2. API Layer (`webgl_mask/views.py`)
 
-- `POST /webgl/masks` — accepts PDF, returns JSON with `mask_images` array of base64-encoded PNGs (or `null` per page if no masked regions found).
-- Masks are generated asynchronously after the main `/open-document` response, so the UI is not blocked.
+- `GET /webgl/mask/<hash>/<n>` — mask for one page of the document the core stored at
+  open time (`state.docHash`). 200 with a grayscale PNG, or 204 when the page has no
+  redactions. Detection runs on demand per page, so opening a huge document costs
+  nothing here and the file is never re-uploaded.
+- `POST /webgl/masks` (and `?default=true`) — legacy whole-document pass; the viewer no
+  longer calls it.
 
 ## 3. Frontend: GPU Rendering (`webgl-mask.js`)
 
 A secondary `<canvas class="webgl-overlay">` is positioned over the primary PDF canvas.
 
 ### Lazy Instantiation
-Browsers limit ~16 simultaneous WebGL contexts. An `IntersectionObserver` ensures contexts are only created for visible pages that have a mask. `refreshWebGLCanvases()` triggers once async mask data arrives.
+Browsers limit ~16 simultaneous WebGL contexts. An `IntersectionObserver` ensures contexts are only created for visible pages. `initWebGLOverlay` fetches the page's mask on first sight and caches it (or the "no mask" answer) in `maskBlobCache` for the rest of the document's lifetime.
 
 ### Textures
 - **`uPage`** — the PDF page image, `LUMINANCE`, `LINEAR` filtering

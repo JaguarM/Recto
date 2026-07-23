@@ -44,6 +44,52 @@ PAGE_W = 816
 PAGE_H = 1056
 
 
+def extract_spans_range(pdf_path: str, start: int = 1, count: int = None) -> dict:
+    """Extract text spans for a range of pages from a stored PDF, by path.
+
+    The lazy counterpart of :func:`extract_pdf`: no page images are decoded or
+    encoded — only the placement rectangle of each page's main image is read
+    (cheap, no pixel data), which is all the coordinate scaling needs. This is
+    what lets a multi-thousand-page document serve its text in quick chunks.
+
+    Returns ``{"numPages": int, "spans": [<span>, ...]}`` for pages
+    ``start .. start+count-1`` (1-based, clamped to the document).
+    """
+    doc = fitz.open(pdf_path)
+    num_pages = doc.page_count
+    first = max(1, start)
+    last = num_pages if count is None else min(num_pages, first + count - 1)
+
+    spans = []
+    for page_num in range(first, last + 1):
+        page = doc.load_page(page_num - 1)
+        img_rect = _page_image_rect(doc, page_num - 1)
+        if img_rect is None:
+            # No embedded raster: the page is displayed as a 96-DPI render of
+            # the full page, so the full page IS the image placement.
+            img_rect = page.rect
+        spans.extend(_extract_spans(page, page_num, img_rect))
+
+    doc.close()
+    return {"numPages": num_pages, "spans": spans}
+
+
+def _page_image_rect(doc: fitz.Document, page_index: int):
+    """Placement rect of the page's largest embedded image — no byte extraction."""
+    page = doc.load_page(page_index)
+    best_rect = None
+    best_area = -1.0
+    for img_info in doc.get_page_images(page_index):
+        rects = page.get_image_rects(img_info[0])
+        if not rects:
+            continue
+        area = rects[0].width * rects[0].height
+        if area > best_area:
+            best_area = area
+            best_rect = rects[0]
+    return best_rect
+
+
 def extract_pdf(pdf_bytes: bytes) -> dict:
     """Extract page images and text spans from PDF bytes."""
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")

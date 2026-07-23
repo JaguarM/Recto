@@ -155,15 +155,27 @@ The `.selected` class on `.utb-group` makes `.utb-bbox` visible (CSS `visibility
 
 ## Embedded Text Ingestion
 
-Text spans are fetched from the backend by `utbFetchSpans(file)` in `etv-fetch.js (embedded_text_viewer)`, which subscribes to the core's `document:loaded` PDFHooks event (it no longer monkey-patches `window.loadDocument`).
+Text spans are fetched from the backend by `etv-fetch.js (embedded_text_viewer)`, which
+subscribes to the core's `document:loaded` and `page:rendered` PDFHooks events (it no
+longer monkey-patches `window.loadDocument`). Fetching is **two-tier** so document size
+never dictates memory:
 
-1. POST `/embedded-text-viewer/api/extract-spans` → `{ spans: [...] }`
-2. **Font size normalization**: works directly on the canonical `span.sizePt` (points). The median `sizePt` is computed and rounded to `documentBasePt`; any span within ±1pt of it is snapped to that value, otherwise it rounds to the nearest whole point. This prevents floating-point rounding in the PDF from creating many slightly-different sizes for the same body text. (The normalized value must be written back to `span.sizePt` — `spanToUnified` reads `sizePt`, so normalizing the old px `fontSize` field would be silently ignored.)
-3. Same normalization is applied retroactively to existing redaction boxes.
-4. Old embedded boxes are removed from `utbState.boxes` (avoiding double-render on re-fetch).
-5. Each span is converted via `spanToUnified(span)` and added with `utbState.addBox(...)`.
-6. `renderAllTextLayers()` is called.
-7. `utbConnectRedactionsToLines()` links redaction boxes to their overlapping text lines.
+1. A background loop (`utbFetchSpans`) walks the whole document in fixed page-range
+   chunks — `GET /embedded-text-viewer/api/extract-spans?hash=<state.docHash>&start&count&lean=1`.
+   Lean spans (`page, text, x, y, w, h, sizePt, font` — no per-character data) go into a
+   per-page cache of JSON strings, exposed read-only to other plugins as
+   `window.etvSpanCache` (base64_tool and the OCR layer comparison scan it).
+2. When a page is **rendered**, its FULL spans (with `chars`) are fetched
+   (`count=1`) and hydrated into `UnifiedTextBox`es. Boxes therefore exist only for
+   pages the user has visited.
+
+Within each batch:
+
+1. **Font size normalization**: works directly on the canonical `span.sizePt` (points). The median `sizePt` of the first non-empty batch becomes `documentBasePt`; any span within ±1pt of it is snapped to that value, otherwise it rounds to the nearest whole point — every later batch reuses the same base, so all batches agree. (The normalized value must be written back to `span.sizePt` — `spanToUnified` reads `sizePt`, so normalizing the old px `fontSize` field would be silently ignored.)
+2. Same normalization is applied retroactively to existing redaction boxes (once per document).
+3. On hydration, each span is converted via `spanToUnified(span)` and added with `utbState.addBox(...)` (the `hydrated` page set prevents double-adds on page revisits).
+4. `renderAllTextLayers()` is called.
+5. `utbConnectRedactionsToLines()` links redaction boxes to their overlapping text lines.
 
 ---
 

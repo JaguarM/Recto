@@ -3,7 +3,7 @@
        ========================================================= */
 const state = {
   // PDF Viewer State
-  pageImages: [],    // data URLs, one per page (index 0 = page 1)
+  pageImages: [],    // per-page raster URLs (/page-image/<hash>/<n>), index 0 = page 1
   numPages: 0,
   pageWidth: GEO.PAGE_WIDTH_PX,
   pageHeight: GEO.PAGE_HEIGHT_PX,

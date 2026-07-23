@@ -131,7 +131,7 @@ The mask construction logic is identical to `generate_mask_from_image`.
 
 ## `generate_all_masks(pdf_bytes)`
 
-Batch processes an entire PDF and returns an array of base64-encoded mask strings (or `null` for pages without redactions). Used by the `/webgl/masks` endpoint for async frontend loading.
+Batch processes an entire PDF and returns an array of base64-encoded mask strings (or `null` for pages without redactions). Used by the legacy `/webgl/masks` endpoint; the viewer itself asks for one page at a time via `/webgl/mask/<hash>/<n>`, which calls `generate_mask_for_page` on the stored document.
 
 
 ---
@@ -176,7 +176,7 @@ The WebGL fragment shader reads `maskVal` (0.0–1.0) directly as the alpha fact
 
 ## WebGL Integration
 
-The mask PNG is served by the Django backend at `/webgl/masks` and loaded as a `LUMINANCE` texture in [webgl-mask.js](../../webgl_mask/static/webgl_mask/webgl-mask.js).
+The mask PNG is served by the Django backend at `/webgl/mask/<hash>/<n>` (one page at a time) and loaded as a `LUMINANCE` texture in [webgl-mask.js](../../webgl_mask/static/webgl_mask/webgl-mask.js).
 
 Fragment shader reads:
 ```glsl

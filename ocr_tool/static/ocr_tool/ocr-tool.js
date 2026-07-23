@@ -383,10 +383,21 @@ const OCR_AUTO_SIMILARITY = 0.8;  // min/max non-whitespace char ratio = "simila
 
 // Non-whitespace characters currently held by one box type ('□' markers and
 // OCR-detected redaction rects carry no text, so they never count).
+// Embedded boxes exist only for pages the user visited (the viewer hydrates
+// lazily) — the rest of the embedded text is counted from the span cache the
+// embedded-text plugin exposes (guarded: it's another plugin and may be absent).
 function ocrTextAmount(type) {
   let n = 0;
   for (const b of utbState.boxes)
     if (b.type === type && !b.ocr?.unread) n += (b.text || '').replace(/\s+/g, '').length;
+  const cache = window.etvSpanCache;
+  if (type === 'embedded' && cache) {
+    for (let p = 1; p <= (state.numPages || 1); p++) {
+      if (cache.isHydrated?.(p) || !cache.hasPage?.(p)) continue;
+      for (const s of cache.spansFor(p) || [])
+        n += (s.text || '').replace(/\s+/g, '').length;
+    }
+  }
   return n;
 }
 

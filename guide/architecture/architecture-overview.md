@@ -44,10 +44,11 @@ recto/
 ├── pdf_core/                       # Core App (document ingestion + base viewer)
 │   ├── base.py                     # PDFTool base class (all plugins inherit from this)
 │   ├── registry.py                 # PDFToolRegistry + @register_tool decorator
-│   ├── views.py                    # Root /, /open-document, /open-default — no analysis
+│   ├── views.py                    # Root /, /open-document, /open-default, /page-image — no analysis
 │   ├── urls.py
 │   ├── logic/
-│   │   ├── document_loader.py      # PDF/image → page rasters, spans, fonts, scale
+│   │   ├── document_store.py       # Uploaded docs stored by sha256 (media/doc_cache, LRU)
+│   │   ├── document_loader.py      # PDF/image → metadata + per-page rasters on demand
 │   │   ├── geometry.py             # The px/pt coordinate contract (single source of truth)
 │   │   ├── shaper.py               # HarfBuzz shaping
 │   │   ├── layout_calculator.py    # Line layout
@@ -70,7 +71,7 @@ recto/
 ├── webgl_mask/                     # Plugin App (Visual GPU Masks)
 │   ├── tool.py                     # WebglMaskTool(PDFTool)
 │   ├── apps.py
-│   ├── views.py                    # /webgl/masks
+│   ├── views.py                    # /webgl/mask/<hash>/<n> (+ legacy /webgl/masks)
 │   ├── urls.py
 │   ├── logic/
 │   │   ├── artifact_visualizer.py  # OpenCV -> grayscale mask PNG generator
@@ -90,7 +91,7 @@ recto/
 │
 ├── extracted_text/                 # Backend-only App (no PDFTool, no UI, no routes)
 │   ├── apps.py                     # Pure logic module
-│   └── logic/extract.py            # extract_pdf() — imported by embedded_text_viewer.views
+│   └── logic/extract.py            # extract_pdf() / extract_spans_range() — imported by embedded_text_viewer.views
 │
 ├── assets/
 │   ├── fonts/                      # .ttf font files for width calculation
@@ -119,20 +120,16 @@ pass that hangs off `document:loaded` — which is what makes every analysis fea
 ```mermaid
 flowchart TD
     A["User opens a PDF or image"] --> B["POST /open-document (pdf_core)"]
-    B --> C{"Is image?"}
-    C -->|Yes| D["load_image()"]
-    C -->|No| E["load_pdf()"]
+    B --> ST["document_store: save once,\nkeyed by sha256"]
+    ST --> F["Metadata pass (PyMuPDF):\npage count, declared fonts,\nsampled body size, pt→px scale"]
+    F --> I["Return small JSON:\nsha256 + typography + geometry\n(NO page images, NO spans, NO analysis)"]
 
-    E --> F["Extract page rasters, embedded text spans,\ndeclared fonts, pt→px scale (PyMuPDF)"]
-    D --> F
-    F --> I["Return JSON:\npage images + spans + typography\n(NO analysis)"]
-
-    I --> J["Frontend (pdf-viewer.js) renders pages"]
+    I --> J["Frontend (pdf-viewer.js) shows a page:\nGET /page-image/&lt;hash&gt;/&lt;n&gt; on demand\n(thumbnails: ?thumb=1, lazily)"]
     J --> HOOK["pdf-viewer.js emits PDFHooks events:\nviewer:clear · page:rendered ·\npages:refresh · document:loaded"]
 
-    HOOK --> O["webgl_mask subscribes →\nPOST /webgl/masks → webgl-mask.js tints canvas"]
+    HOOK --> O["webgl_mask subscribes →\nGET /webgl/mask/&lt;hash&gt;/&lt;n&gt; per page\n→ webgl-mask.js tints canvas"]
     HOOK --> TXT["text_tool subscribes →\nrenderTextLayer draws SVG overlay"]
-    HOOK --> ETVJS["embedded_text_viewer subscribes →\nPOST /embedded-text-viewer/api/extract-spans"]
+    HOOK --> ETVJS["embedded_text_viewer subscribes →\nGET extract-spans?hash=… in chunks\n(lean whole-doc + full per viewed page)"]
 
     J --> K["User edits or adds text"]
     K --> L["POST /widths (text_tool)\n(HarfBuzz text shaping)"]
@@ -151,16 +148,17 @@ graph TD
         REG["registry.py\n@register_tool"]
         BASE["base.py\nPDFTool"]
         HOOKS["hooks.js\nPDFHooks bus"]
-        DL["logic/document_loader.py\nrasters · spans · fonts · scale"]
+        DL["logic/document_loader.py\nmetadata · per-page rasters"]
+        DS["logic/document_store.py\nsha256-keyed store"]
         GEO["logic/geometry.py\npx/pt coordinate contract"]
-        core_views["views.py\n/ · /open-document · /open-default"]
+        core_views["views.py\n/ · /open-document · /open-default · /page-image"]
         HTML["index.html"]
         APP["app.js / pdf-viewer.js / ui-events.js"]
     end
 
     subgraph "webgl_mask (Plugin)"
         WGL_TOOL["tool.py\nWebglMaskTool"]
-        WGL_V["views.py\n/webgl/masks"]
+        WGL_V["views.py\n/webgl/mask/&lt;hash&gt;/&lt;n&gt;"]
         AV["artifact_visualizer.py"]
         MASK["masking.py\n(OpenCV)"]
         WGL_JS["webgl-mask.js"]

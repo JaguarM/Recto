@@ -42,16 +42,23 @@ function processZoomFromText(newZoom, mouseX = null, mouseY = null) {
 function renderThumbnails() {
   els.thumbnailView.innerHTML = '';
 
+  // Fixed dimensions + native lazy loading: on a multi-thousand-page document
+  // only the thumbnails scrolled into view are ever fetched (the ?thumb=1
+  // variant is a small server-side downscale of the page raster).
+  const thumbH = Math.round(180 * (state.pageHeight / (state.pageWidth || 1))) || 233;
+
   for (let i = 1; i <= state.numPages; i++) {
     const thumbCont = document.createElement('div');
     thumbCont.className = 'thumbnail-container' + (i === state.currentPage ? ' active' : '');
 
     const img = document.createElement('img');
-    img.src = state.pageImages[i - 1];
+    img.src = `${state.pageImages[i - 1]}?thumb=1`;
+    img.loading = 'lazy';
+    img.decoding = 'async';
     img.className = 'thumbnail';
     img.draggable = false;
     img.style.width = '180px';
-    img.style.height = 'auto';
+    img.style.height = `${thumbH}px`;
     img.style.display = 'block';
 
     const lbl = document.createElement('div');

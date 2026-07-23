@@ -152,14 +152,14 @@
 
   <script src="{% static 'pdf_core/hooks.js' %}?v=1"></script>
   <script src="{% static 'text_tool/geometry.js' %}?v=1"></script>
-  <script src="{% static 'pdf_core/state.js' %}?v=4"></script>
+  <script src="{% static 'pdf_core/state.js' %}?v=5"></script>
   {% for name, tool in tools.items %}
     {% for script in tool.scripts_before_viewer %}
   <script src="{% static script.path %}{% if script.version %}?{{ script.version }}{% endif %}"></script>
     {% endfor %}
   {% endfor %}
-  <script src="{% static 'pdf_core/pdf-viewer.js' %}?v=5"></script>
-  <script src="{% static 'pdf_core/ui-events.js' %}?v=2"></script>
+  <script src="{% static 'pdf_core/pdf-viewer.js' %}?v=6"></script>
+  <script src="{% static 'pdf_core/ui-events.js' %}?v=3"></script>
   <script src="{% static 'pdf_core/app.js' %}?v=3"></script>
 
 

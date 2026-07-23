@@ -15,47 +15,64 @@ The plugin follows the standard Recto "toolbar button + overlay" pattern used by
 
 ```mermaid
 sequenceDiagram
-    participant User
-    participant ToolbarBtn as Toggle Button
+    participant Core as pdf-viewer.js (hooks)
     participant JS as etv-fetch.js
-    participant API as POST /embedded-text-viewer/api/extract-spans
+    participant API as GET /embedded-text-viewer/api/extract-spans?hash=…
     participant State as utbState
     participant Renderer as svg-renderer.js
 
-    User->>ToolbarBtn: Click (pdf-file change / auto-fetch on load)
-    JS->>API: POST uploaded PDF file
-    Note over API: embedded_text_viewer/views.py<br/>imports extracted_text.logic.extract<br/>PyMuPDF extracts rawdict spans<br/>Returns normalized span data
-    API-->>JS: JSON { spans: [...] }
-    JS->>JS: Normalize font sizes (median-pt snap)
-    JS->>State: Remove old type='embedded' boxes; add new UnifiedTextBox entries
+    Core->>JS: document:loaded
+    loop background, whole document in page-range chunks
+        JS->>API: ?hash&start&count&lean=1
+        API-->>JS: lean spans (no per-char data)
+        JS->>JS: normalize sizes; cache per page (etvSpanCache)
+    end
+    Core->>JS: page:rendered (pageNum)
+    JS->>API: ?hash&start=pageNum&count=1 (full spans)
+    API-->>JS: JSON { spans: [...] } with chars
+    JS->>State: hydrate: add UnifiedTextBox entries for that page
     JS->>Renderer: renderAllTextLayers()
     JS->>JS: utbConnectRedactionsToLines()
-    Note over Renderer: SVG <text> elements rendered<br/>in blue over each page image
+    Note over Renderer: SVG <text> elements rendered<br/>in blue over the page image
 ```
 
 ## Span Fetching — `etv-fetch.js`
 
 `etv-fetch.js` (in `static/embedded_text_viewer/`) owns all ETV-specific frontend logic:
 
-- **`utbFetchSpans(file)`** — POSTs the PDF to `/embedded-text-viewer/api/extract-spans`, normalizes font sizes, populates `utbState` with `type='embedded'` `UnifiedTextBox` objects, and calls `renderAllTextLayers()`.
+- **`utbFetchSpans()`** — the background loop: fetches LEAN spans (`lean=1`) for the whole
+  document in fixed page-range chunks, keyed by `state.docHash` (the file itself is never
+  re-uploaded — the core stored it at open time). Lean spans go into a per-page cache of
+  JSON strings.
+- **`etvHydratePage(pageNum)` / `etvFetchFull(pageNum)`** — on `page:rendered`, fetches that
+  one page's FULL spans (with per-character positions), normalizes font sizes, and populates
+  `utbState` with `type='embedded'` `UnifiedTextBox` objects. Boxes exist only for visited pages.
+- **`window.etvSpanCache`** — read-only view of the lean cache (`complete() / anyText() /
+  hasPage(p) / isHydrated(p) / spansFor(p)`) for plugins that scan the whole document's text
+  (base64_tool; the OCR layer comparison).
 - **`utbConnectRedactionsToLines()`** — Links redaction boxes to their overlapping embedded text lines by snapping `lineId`, `y`, and `h`.
 - **`window.addEmbeddedTextSpan(pageNum, x, y)`** — Creates a new `type='embedded'` box, snaps to the nearest text line, selects it, and opens the toolbar.
 - **`window._utbFindNearestLine(pageNum, y)`** — Helper used by `text_tool/text-tool.js` when placing manual boxes (optional: gracefully absent if ETV plugin is not installed).
-- **`document:loaded` subscription** — Subscribes to the core's `document:loaded` PDFHooks event and (re)fetches spans for the newly loaded document. The plugin no longer monkey-patches `window.loadDocument`; the core resets `utbState`/SVG layers itself at the top of `loadDocument`.
+- **`document:loaded` subscription** — resets the hydrated set (the core reset `utbState`),
+  invalidates the cache if the hash changed, kicks the background loop, and re-hydrates
+  whatever page is on screen. The plugin no longer monkey-patches `window.loadDocument`.
 - **`pdf-file` change listener** — Clears stale overlays the moment a new file is selected, before analysis returns (the actual re-fetch happens on the subsequent `document:loaded`).
 
 `etv-fetch.js` is declared in `embedded_text_viewer/tool.py` as a `scripts_after_app` entry and is loaded by the registry after all core scripts.
 
 ## Backend — `embedded_text_viewer/views.py`
 
-The `extract_spans` view lives in `embedded_text_viewer/views.py`. It imports `extract_pdf` from `extracted_text.logic.extract` (a pure logic module with no active routes of its own) and returns the full span payload used by `etv-fetch.js`.
+The `extract_spans` view lives in `embedded_text_viewer/views.py`. It imports
+`extract_spans_range` (hash mode) and `extract_pdf` (upload fallback) from
+`extracted_text.logic.extract` (a pure logic module with no active routes of its own).
 
 ## Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/embedded-text-viewer/api/extract-spans` | Accepts a PDF file upload (`file`). Returns JSON with a `spans` array. |
-| `GET` | `/embedded-text-viewer/api/extract-spans` | Returns spans for the bundled default PDF. |
+| `GET` | `/embedded-text-viewer/api/extract-spans?hash=<sha256>&start&count[&lean=1]` | Spans for a page range of the stored document — the viewer's path. |
+| `POST` | `/embedded-text-viewer/api/extract-spans` | Accepts a PDF file upload (`file`). Whole-document fallback. |
+| `GET` | `/embedded-text-viewer/api/extract-spans` | Returns spans for the bundled default PDF (fallback). |
 
 ### Response Format
 
