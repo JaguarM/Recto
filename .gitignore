@@ -29,6 +29,11 @@ local_settings.py
 .env.*
 !.env.example
 
+# Demo — generated on the server by `demo/manage.py prerender_samples` /
+# `collectstatic`; the source PDFs in demo/samples/ ARE tracked.
+demo/prerendered/
+demo/staticfiles/
+
 # Debug
 debug_out/
 _temp_test_files/

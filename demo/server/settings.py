@@ -44,7 +44,7 @@ TEMPLATES = [
     },
 ]
 
-WSGI_APPLICATION = None
+WSGI_APPLICATION = 'server.wsgi.application'
 DATABASES = {}
 
 USE_TZ = True
@@ -53,6 +53,7 @@ DATA_UPLOAD_MAX_MEMORY_SIZE = 52428800  # 50 MB
 FILE_UPLOAD_MAX_MEMORY_SIZE = 52428800
 
 STATIC_URL = 'static/'
+STATIC_ROOT = DEMO_DIR / 'staticfiles'   # collectstatic target; nginx serves it
 # ocr_tool/static exposes /static/ocr_tool/engine/*.js and glyphs/* exactly at
 # the paths the engine expects (same layout as in Recto).
 STATICFILES_DIRS = [BASE_DIR / 'ocr_tool' / 'static']

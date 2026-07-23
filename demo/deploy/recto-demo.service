@@ -1,0 +1,21 @@
+# systemd unit for the demo's gunicorn backend.
+#   sudo cp demo/deploy/recto-demo.service /etc/systemd/system/
+#   sudo systemctl enable --now recto-demo
+#
+# 2 workers is plenty on a small VPS: nginx serves all sample traffic, so
+# gunicorn only handles the landing page and occasional uploads.
+
+[Unit]
+Description=Recto demo (gunicorn)
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/recto/demo
+Environment=DJANGO_DEBUG=0
+Environment=DJANGO_ALLOWED_HOSTS=demo.example.com
+Environment=DJANGO_SECRET_KEY=change-me
+ExecStart=/srv/recto/venv/bin/gunicorn server.wsgi:application --bind 127.0.0.1:8001 --workers 2 --timeout 120
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

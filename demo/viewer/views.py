@@ -18,6 +18,9 @@ DEMO_DIR = Path(__file__).resolve().parent.parent
 # Sample PDFs: drop files into demo/samples/; the repo's bundled startup PDF
 # (assets/pdfs/) is included too so the demo works out of the box.
 SAMPLE_DIRS = (DEMO_DIR / 'samples', DEMO_DIR.parent / 'assets' / 'pdfs')
+# Output of `manage.py prerender_samples` — in production nginx serves this
+# directory directly and requests never reach Django.
+PRERENDERED_DIR = DEMO_DIR / 'prerendered'
 
 _IMMUTABLE = 'public, max-age=31536000, immutable'
 
@@ -68,6 +71,25 @@ def open_document(request):
         return JsonResponse({'detail': 'The demo opens PDF files only'}, status=400)
     doc_hash = document_store.save_upload(file, ext='.pdf')
     return _open_stored(doc_hash, file.name)
+
+
+def prerendered(request, name, filename):
+    """Dev-only stand-in for nginx's `location /prerendered/` — same files,
+    same immutable caching. URL converters exclude '/', so only a literal
+    '..' segment could escape; reject it."""
+    if '..' in (name, filename):
+        return JsonResponse({'detail': 'Not found'}, status=404)
+    path = PRERENDERED_DIR / name / filename
+    if not path.is_file():
+        return JsonResponse({'detail': 'Not found'}, status=404)
+    is_json = filename.endswith('.json')
+    resp = HttpResponse(path.read_bytes(),
+                        content_type='application/json' if is_json else 'image/png')
+    # meta.json must revalidate (a sample file can be replaced under the same
+    # name); images are safe to cache forever because the frontend versions
+    # their URLs with ?v=<sha> taken from meta.json.
+    resp['Cache-Control'] = 'no-cache' if is_json else _IMMUTABLE
+    return resp
 
 
 def page_image(request, doc_hash, page_num):

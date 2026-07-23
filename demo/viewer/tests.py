@@ -31,6 +31,24 @@ class DemoViewsTests(SimpleTestCase):
         r = self.client.get('/open-sample/nope.pdf')
         self.assertEqual(r.status_code, 404)
 
+    def test_prerendered_sample_served_with_fresh_meta(self):
+        import json
+        from viewer.views import PRERENDERED_DIR
+        if not (PRERENDERED_DIR / 'EFTA00434905.pdf' / 'meta.json').is_file():
+            self.skipTest('run `manage.py prerender_samples` first')
+        r = self.client.get('/prerendered/EFTA00434905.pdf/meta.json')
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r['Cache-Control'], 'no-cache')
+        meta = json.loads(r.content)
+        self.assertEqual(meta['image_base'], '/prerendered/EFTA00434905.pdf/')
+        img = self.client.get('/prerendered/EFTA00434905.pdf/1.png')
+        self.assertEqual(img.status_code, 200)
+        self.assertIn('immutable', img['Cache-Control'])
+
+    def test_prerendered_rejects_traversal(self):
+        r = self.client.get('/prerendered/../secret/meta.json')
+        self.assertIn(r.status_code, (301, 404))
+
     def test_upload_rejects_non_pdf(self):
         from django.core.files.uploadedfile import SimpleUploadedFile
         f = SimpleUploadedFile('note.txt', b'hello', content_type='text/plain')

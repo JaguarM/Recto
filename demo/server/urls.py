@@ -7,4 +7,5 @@ urlpatterns = [
     path('open-sample/<str:name>', views.open_sample, name='demo-open-sample'),
     path('open-document', views.open_document, name='demo-open-document'),
     path('page-image/<str:doc_hash>/<int:page_num>', views.page_image, name='demo-page-image'),
+    path('prerendered/<str:name>/<str:filename>', views.prerendered, name='demo-prerendered'),
 ]

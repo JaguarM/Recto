@@ -44,8 +44,15 @@ async function demoOpen(fetchPromise, name) {
     demoState.numPages = data.num_pages || 1;
     demoState.pageWidth = data.page_width || 816;
     demoState.pageHeight = data.page_height || 1056;
-    demoState.pageImages = Array.from({ length: demoState.numPages },
-      (_, i) => `/page-image/${demoState.docHash}/${i + 1}`);
+    // Pre-rendered samples carry image_base ("/prerendered/<name>/") — those
+    // URLs are served by nginx in production and never touch Python. The
+    // ?v=<sha> versions the immutable-cached images so a replaced sample
+    // file can't serve stale pages. Everything else is lazy per-page by hash.
+    demoState.pageImages = data.image_base
+      ? Array.from({ length: demoState.numPages },
+          (_, i) => `${data.image_base}${i + 1}.png?v=${demoState.docHash.slice(0, 12)}`)
+      : Array.from({ length: demoState.numPages },
+          (_, i) => `/page-image/${demoState.docHash}/${i + 1}`);
 
     $('doc-title').textContent = demoState.docName;
     $('page-count').textContent = `/ ${demoState.numPages}`;
@@ -64,7 +71,12 @@ async function demoOpen(fetchPromise, name) {
 }
 
 function openSample(name) {
-  demoOpen(fetch(`/open-sample/${encodeURIComponent(name)}`), name);
+  // Prefer the pre-rendered static copy (free for the server); fall back to
+  // the live endpoint for samples that haven't been pre-rendered yet.
+  demoOpen((async () => {
+    const pre = await fetch(`/prerendered/${encodeURIComponent(name)}/meta.json`);
+    return pre.ok ? pre : fetch(`/open-sample/${encodeURIComponent(name)}`);
+  })(), name);
 }
 
 function openUpload(file) {

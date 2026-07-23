@@ -34,6 +34,28 @@ The demo is deliberately **not** a Recto plugin: `demo/` has no top-level
 `apps.py`, so Recto's plugin auto-discovery never installs it, and nothing in
 baseline Recto references it.
 
+## Deploying on a small VPS (the €5 plan)
+
+Almost all visitors just click a sample card — so samples are pre-rendered to
+static files and served by nginx; Python (gunicorn, 2 workers) only handles
+the landing page and the occasional upload.
+
+```bash
+python demo/manage.py prerender_samples      # → demo/prerendered/<name>/{meta.json,1.png,…}
+python demo/manage.py collectstatic --noinput # → demo/staticfiles/ (engine, glyphs, viewer JS)
+```
+
+Then install `demo/deploy/nginx-demo.conf` (nginx site — serves
+`/prerendered/` and `/static/` from disk with far-future caching, proxies the
+rest) and `demo/deploy/recto-demo.service` (systemd unit for gunicorn on
+port 8001). Re-run `prerender_samples` whenever a sample PDF changes — it
+skips unchanged files by hash. The frontend versions page-image URLs with
+`?v=<sha>`, so replaced samples can never serve stale cached pages.
+
+In dev nothing changes: the same `/prerendered/` URLs are served by a small
+Django view, and a sample that hasn't been pre-rendered falls back to the
+live `/open-sample` endpoint automatically.
+
 ## Sample PDFs
 
 Drop `*.pdf` files into `demo/samples/` — each becomes a landing-page card.
