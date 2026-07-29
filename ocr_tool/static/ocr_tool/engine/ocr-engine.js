@@ -178,7 +178,7 @@
           }
           if (dark) { if (sS < 0) sS = x; }
           else if (sS >= 0) {
-            if (x - sS >= 10 && x - sS < 40) shortRuns.push({ y, x0: sS, x1: x });
+            if (x - sS >= 9) shortRuns.push({ y, x0: sS, x1: x, wide: x - sS >= 40 });
             sS = -1;
           }
         }
@@ -216,17 +216,30 @@
     // a stack of ≥8 rows whose STRICTLY-contiguous dark runs share one x-extent
     // (±1) is a filled box — text can't fake it: letter interiors break the
     // contiguity, and no glyph stack holds one constant extent for 8 rows
-    // (x-height spans ~7). Runs 10–39 px (collected in the fused pass above);
-    // ≥40 is the main rule's job.
+    // (x-height spans ~7). Runs 9–39 px start a stack — 9 is a one-character
+    // inline redaction at times16 (EFTA00679795 p7: byte-0 core x=650–656 under
+    // constant AA edges 104/150, held for 17 rows), and a 9px run cannot be
+    // glyph ink because every glyph that wide carries a counter that breaks the
+    // contiguity. ≥40 is the main rule's job, so a WIDE run may only CONTINUE
+    // a stack whose extent it fully covers
+    // and never starts one or moves an edge. A glyph touching a box's side fuses
+    // with it into one over-40 run for those rows (EFTA00631967 p2 block B,
+    // y=212), and dropping that row split an 18-row box into 13 + 4 — the 4 then
+    // fell under the ≥8 floor and the bottom of the box went unmasked. A row
+    // that is solid dark clear across an already-proven box extent is a box row
+    // whatever else is fused onto its end.
     const stacks = [];
     for (const r of shortRuns) {
-      const g = stacks.find(g => g.y1 === r.y &&
-        Math.abs(g.x0 - r.x0) <= 1 && Math.abs(g.x1 - r.x1) <= 1);
+      const g = stacks.find(g => g.y1 === r.y && (r.wide
+        ? r.x0 <= g.x0 + 1 && r.x1 >= g.x1 - 1
+        : Math.abs(g.x0 - r.x0) <= 1 && Math.abs(g.x1 - r.x1) <= 1));
       if (g) g.y1 = r.y + 1;
-      else stacks.push({ y0: r.y, y1: r.y + 1, x0: r.x0, x1: r.x1 });
+      else if (!r.wide) stacks.push({ y0: r.y, y1: r.y + 1, x0: r.x0, x1: r.x1 });
     }
+    // `sb` marks a small box as STACK-born: its extent is evidence from
+    // shortRuns, not from `rows`, which the box-extent pass below relies on.
     for (const g of stacks)
-      if (g.y1 - g.y0 >= 8) objects.push({ y0: g.y0, y1: g.y1, x0: g.x0, x1: g.x1 });
+      if (g.y1 - g.y0 >= 8) objects.push({ sb: true, y0: g.y0, y1: g.y1, x0: g.x0, x1: g.x1 });
     // vertical rules (table/quote borders): long solid runs down a column —
     // collected in the fused pass above; the sort restores column-major order
     vcols.sort((a, b) => a.x - b.x || a.y0 - b.y0);
@@ -245,10 +258,21 @@
     // and take each segment's edge as the MODE of its rows — bridged rows shift
     // an edge for a minority of rows and lose the vote, while real AA wobble
     // stays within the ±2 mask padding.
+    // Applies to `rows`-born boxes ONLY. `ext` below is re-derived from `rows`,
+    // so for a stack-born small box (`sb`) it is not that box's own evidence but
+    // a foreign row set — and the pass ENDS by splicing the object out and
+    // replacing it with whatever `ext` claimed. A 38×18 solid redaction whose
+    // strict runs are 38 on all 18 rows still puts a row in `rows` whenever a
+    // glyph sits within the ≤1px bridge gap (EFTA00631967 p2: block A at y=104,
+    // block B at y=211–212, bridged to 41px), and that one row then replaced the
+    // whole box with a 1–2 row "rule". Stack-born boxes need no correction
+    // anyway: the pass fixes width-merged bboxes and glyph-bridged rows, and the
+    // stacks loop can produce neither (±1 join on STRICTLY-contiguous runs — a
+    // touching glyph moves an edge by more than 1 and starts a new stack).
     const segmented = [];
     for (let i = objects.length - 1; i >= 0; i--) {
       const o = objects[i];
-      if (o.vr || o.y1 - o.y0 <= 4) continue;
+      if (o.vr || o.sb || o.y1 - o.y0 <= 4) continue;
       const ext = [];                                    // per-row [y, x0, x1]
       for (const r of rows)
         if (r.y >= o.y0 && r.y < o.y1 && r.x1 > o.x0 && r.x0 < o.x1) {
@@ -347,14 +371,31 @@
     const mRows = new Uint8Array(h);       // per-row "mask has cells here" flag —
     for (const o of objects) {             // lets scanLine's window init skip rows
       o.type = o.vr ? 'vrule' : o.y1 - o.y0 <= 4 ? 'rule' : 'box';
-      delete o.vr;
+      delete o.vr; delete o.sb;
+      // Sample the adjacent line only where THIS object owns the pixel. Where a
+      // neighbouring object overlaps it, the AA line carries that object's ink
+      // too and the composite is a different value — which splits the constancy
+      // vote and denies the padding. EFTA00382173 p1: a redaction at y=182–200
+      // x=82–146 sits directly on top of one at y=201–218 x=61–106, so their
+      // shared row 200 reads 187 over x=61–81 (this box's own AA) but ~112 over
+      // x=82–106 (both), voting 24/46 against a 27.6 bar. The 46px AA row then
+      // stayed unmasked inside the text line above it and became its one □.
+      const others = objects.filter(b => b !== o);
+      const own = (x, y) => !others.some(b => x >= b.x0 && x < b.x1 && y >= b.y0 && y < b.y1);
       const col = x => { const v = []; for (let y = o.y0; y < o.y1; y++) v.push(gray[y * w + x]); return v; };
-      const row = y => { const v = []; for (let x = o.x0; x < o.x1; x++) v.push(gray[y * w + x]); return v; };
+      const row = (y, sole) => { const v = [];
+        for (let x = o.x0; x < o.x1; x++) if (!sole || own(x, y)) v.push(gray[y * w + x]);
+        return v; };
+      // A row also qualifies on the span this box SOLELY owns. Both readings are
+      // evidence of a fractional edge, so this only ever grants padding — taking
+      // the sole-span vote as a replacement instead denied it elsewhere (`big`
+      // grew a third box fragment).
+      const edgeRow = y => sideAA(row(y)) || sideAA(row(y, true));
       const x0 = o.x0 > 0 && sideAA(col(o.x0 - 1)) ? o.x0 - 1 : o.x0;
       const x1 = o.x1 < w && sideAA(col(o.x1)) ? o.x1 + 1 : o.x1;
-      const y0 = o.type === 'box' ? (o.y0 > 0 && sideAA(row(o.y0 - 1)) ? o.y0 - 1 : o.y0)
+      const y0 = o.type === 'box' ? (o.y0 > 0 && edgeRow(o.y0 - 1) ? o.y0 - 1 : o.y0)
         : Math.max(0, o.y0 - 2);
-      const y1 = o.type === 'box' ? (o.y1 < h && sideAA(row(o.y1)) ? o.y1 + 1 : o.y1)
+      const y1 = o.type === 'box' ? (o.y1 < h && edgeRow(o.y1) ? o.y1 + 1 : o.y1)
         : Math.min(h, o.y1 + 2);
       for (let y = y0; y < y1; y++) {
         mRows[y] = 1;
@@ -884,6 +925,15 @@
     };
 
     const glyphs = [], fails = [], frags = [], records = [];
+    // fail-absorbed pixels that a LATER-accepted glyph's ink covers. The flood
+    // absorbs a failing blob's pixels out to col+2 BEFORE the glyphs right of
+    // col have been tried, so it can bury the leading AA column of a letter
+    // that then reads perfectly well from its intact remainder (a kerned "pp"
+    // whose inter-stem AA sits one pixel inside the reach). Those pixels are
+    // accounted for by the glyph that covered them, not unread ink, so they
+    // must not keep the □ alive at classification time. Lazily allocated:
+    // pages with no fails never pay.
+    let revive = null;
     let failGuard = -1;                     // right edge of the last failed blob
     let flVis = null, flGen = 0;            // flood visited map (lazy, generation-stamped)
     const accepted = new Set();                          // "ch@pen" — never re-accept
@@ -1055,7 +1105,7 @@
           const px = k >> 16, py = k & 0xffff;
           if (px <= col + 2) {
             setCan(px, py, pageAt(px, py));
-            skip[(py - y0) * bw + (px - xFrom)] = 1;
+            skip[(py - y0) * bw + (px - xFrom)] = 2;   // 2 = fail-absorbed (see `revive`)
             // absorbed = retired, even when the byte is no fixpoint of a
             // foreign QUANT (setCan's fixpoint rule then leaves it counted
             // and the loop re-enters this column forever). Fixpoint bytes
@@ -1085,7 +1135,11 @@
       for (const p of g.ink) {
         const rr = (p / g.w) | 0, cc = p % g.w;
         const x = gx + cc, y = gy + rr;
-        if (masked(x, y)) continue;                      // keep page bytes under objects
+        if (masked(x, y)) {                              // keep page bytes under objects
+          const mi = (y - y0) * bw + (x - xFrom);
+          if (skip[mi] === 2) (revive ??= new Uint8Array(bw * bh))[mi] = 1;
+          continue;
+        }
         const gb = g.bytes[p], ga = g.alpha[p], pv = pageAt(x, y), cv = canAt(x, y);
         if (TOL && cv !== 255 && gb >= 255 - 2 * TOL) continue;  // faint skip (see above)
         const t = cv !== 255 ? 2 * TOL : TOL;
@@ -1130,7 +1184,8 @@
       const dead = [];
       for (const k of r.comp) {
         const px = k >> 16, py = k & 0xffff;
-        if (!skip[(py - y0) * bw + (px - xFrom)]) continue;
+        const di = (py - y0) * bw + (px - xFrom);
+        if (!skip[di] || (revive && revive[di])) continue;
         dead.push(k);
         if (px < minX) minX = px;
         if (px > maxX) maxX = px;
@@ -1167,6 +1222,15 @@
   }
 
   // ---- spaces from measured gaps ----
+  // ONE space advance per page, over every line's gaps. Measured 2026-07-26 on
+  // the synthetic gate's page (tools/synth-gate.mjs): a page whose faces have
+  // DIFFERENT space advances transcribes the wider ones as multiples — 16-px
+  // Nimbus Roman (space 4.0 px) and 12.36-px Courier (7.41 px) on one page
+  // calibrate to 3.98 and the Courier lines come back "Received:  by  10.229…".
+  // Not a defect to patch blind: the cluster is what makes narrow styled spaces
+  // measurements instead of errors, and every gate document that carries a
+  // truth file is single-family. It is a limit to know before certifying
+  // spacing on a mixed-family page.
   function spaceCalib(lines) {
     // gaps between consecutive glyphs, minus advance: cluster the positive ones
     const gaps = [];
@@ -1283,17 +1347,19 @@
       // glyph fragment protruding from a redaction box at the band's left edge
       // must not aim that window into the box span (it reads nothing there and
       // the whole band goes unread)
-      let xp = x0;
-      {
-        let bestN = -1, s = -1, nn = 0, gap = 0;
-        for (let x = x0; x <= x1 + 9; x++) {
-          if (x <= x1 && colInk[x]) { if (s < 0) { s = x; nn = 0; } nn++; gap = 0; }
+      const denseStart = (ci, a0, a1) => {
+        let best = -1, bestN = -1, s = -1, nn = 0, gap = 0;
+        for (let x = a0; x <= a1 + 9; x++) {
+          if (x <= a1 && ci[x]) { if (s < 0) { s = x; nn = 0; } nn++; gap = 0; }
           else if (s >= 0 && ++gap > 8) {
-            if (nn > bestN) { bestN = nn; xp = s; }
+            if (nn > bestN) { bestN = nn; best = s; }
             s = -1;
           }
         }
-      }
+        return best;
+      };
+      const xpd = denseStart(colInk, x0, x1);
+      const xp = xpd < 0 ? x0 : xpd;                     // no ink at all: x0 (== page.w)
       // objects sharing rows with this band (reported per line; space gaps
       // spanning them are suppressed)
       const lineObjects = objects.filter(ob => ob.y0 < bot + 4 && ob.y1 > top - 4);
@@ -1365,6 +1431,64 @@
               const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
               if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score, below: true };
             }
+      // ---- PACKED LINES ----
+      // Printed-MIME dumps set ~12px pitch with 10-12px of ink, so consecutive
+      // lines abut and a whole PARAGRAPH lands in one ink band (EFTA00521182
+      // p12 band [55,89) holds three lines, baselines 64/76/88). Such a band
+      // is handled by the stacked split further down — but only once SOME
+      // baseline in it pins, and every sweep above aims its 160px probe window
+      // at xp, the densest ink cluster of the WHOLE band. On a one-line band
+      // that is the line's own text; on a stacked band it is whichever stacked
+      // line has the most ink, while the sweeps are trying to pin the line at
+      // the band BOTTOM. When the two differ the probe reads blank page and
+      // scores 0 at EVERY baseline, and 3+ text lines are reported as one □.
+      // (Measured on p12: probe at xp=37 scores 0 for the whole sweep range;
+      // at the bottom line's own anchor 215 the true baseline 88 scores 102.)
+      // Both passes below are guarded to bands taller than one scan window
+      // (maxAsc+maxDesc), which provably hold more than one line — no
+      // single-line band can reach either, which is what keeps the gate docs
+      // byte-identical.
+      //
+      // anchor for ONE candidate baseline, measured over that baseline's own
+      // scan-window rows (clipped to the band) instead of the whole band
+      const winAnchor = (yb, set) => {
+        const ci = new Uint8Array(page.w);
+        for (let y = Math.max(top, yb - set.maxAsc); y < Math.min(bot, yb + set.maxDesc); y++) {
+          const off = y * page.w;
+          for (let x = x0; x <= x1; x++)
+            if (page.gray[off + x] < 255 && !mask[off + x]) ci[x] = 1;
+        }
+        return denseStart(ci, x0, x1);
+      };
+      // one anchored sweep over yb ∈ [yLo, yHi] (see the guard above)
+      const packedSweep = (yLo, yHi, skipXp) => {
+        for (const set of sets) {
+          if (bot - top <= set.maxAsc + set.maxDesc) continue;
+          for (let yb = Math.min(yHi, bot); yb >= yLo && yb > top; yb--) {
+            const xa = winAnchor(yb, set);
+            if (xa < 0 || (skipXp && xa === xp)) continue;   // identical to a sweep above
+            for (const phy of set.byPhy.keys()) {
+              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xa - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
+              if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score };
+            }
+          }
+        }
+      };
+      // pass 1 — the bottom line, re-anchored. Keeps the engine's bottom-first
+      // peel order: pin the last line, split it off, let the rows above
+      // re-enter this loop as a band of their own.
+      if (!pick) packedSweep(bot - Math.max(...sets.map(s => s.maxDesc)), bot, true);
+      // pass 2 — ANY line in the band. The bottom line of a packed band can be
+      // unpinnable for a second reason: at ~12px pitch the line ABOVE it
+      // overlaps its scan window (window height maxAsc+maxDesc = 15 > pitch;
+      // at the normal 18px pitch the two never touch), so that line's
+      // descenders sit inside this scan as ink nothing explains — and being
+      // ABOVE, it has not been read into `explained` yet, because the peel
+      // runs bottom-first. Pinning whichever line in the band CAN be proven
+      // breaks the deadlock: the existing above/below splits queue its
+      // neighbours as bands of their own, and by the time they are scanned its
+      // ink is explained and the overlap rows are settled evidence.
+      if (!pick) packedSweep(top + 1, bot - Math.max(...sets.map(s => s.maxDesc)) - 1, false);
       if (pick) last = { set: pick.set, phy: pick.phy };
       const pushUnread = () => {
         // a band whose every ink pixel sits inside box halos is redaction

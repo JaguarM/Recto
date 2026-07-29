@@ -31,7 +31,22 @@
     'cour13',                                    // courier_1/2 body font
     // linear-compositor variants (eDiscovery producer — see ocr-engine.js);
     // the per-band auto-pick chooses whichever compositor matches the page
-    'timeslin16', 'timesbdlin16', 'timesilin16', 'tnr8lin16', 'tnr8lin10'];
+    'timeslin16', 'timesbdlin16', 'timesilin16', 'tnr8lin16', 'tnr8lin10',
+    // Tahoma email family (ocr/FINDINGS-tahoma.md) — the largest tol-0 corpus
+    // population with no engine pool until 2026-07-26; three sizes plus the
+    // Segoe UI 853 second body face the same threads quote
+    'tahoma832', 'tahomabd832', 'tahoma853', 'tahomabd853',
+    'tahoma1024', 'tahomabd1024', 'segoeui853', 'segoeuib853',
+    // EFTA01150379's face (ocr/FINDINGS-b64grid.md): DejaVu Serif em64 786.
+    // Right face, wrong BUILD — polygon glyphs byte-exact, curve glyphs off
+    // 2–4 (`t` 7, `D` 13), so useful reads come from the ladder tol rungs.
+    'dejavuserif786',
+    // …and the same face under the producer's recreated TRANSPORT LAW, which
+    // reads that document at TOLERANCE 0: p2 goes 285 glyphs / 278 □ on the
+    // stock set to 2,575 glyphs / 1 □ on this one, and six consecutive base64
+    // pages read 5,320 glyphs at 0 □. Both are carried — the stock set still
+    // names the face for anything the law does not cover.
+    'dejavuserif786law'];
   // "…/glyphs_times16.json" (legacy url) / "times16" -> "times16"
   const setName = s => s.replace(/^.*glyphs_/, '').replace(/\.json$/, '').replace(/^.*\//, '');
 

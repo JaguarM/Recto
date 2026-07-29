@@ -21,10 +21,10 @@ class OcrTool(PDFTool):
     options_bar = 'ocr_tool/options_bar.html'
     scripts_after_app = [
         # engine files (synced — versions rewritten by sync-recto.mjs)
-        {'path': 'ocr_tool/engine/core.js', 'version': 'v=4c9df04f'},
-        {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=3e8cb783'},
-        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=c1b3ec8c'},
-        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=92e6f266'},
+        {'path': 'ocr_tool/engine/core.js', 'version': 'v=ab4d2193'},
+        {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=b95cb058'},
+        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=4481e85f'},
+        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=e17c99c1'},
         # the adapter (Recto-owned)
         {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=6'},
     ]
