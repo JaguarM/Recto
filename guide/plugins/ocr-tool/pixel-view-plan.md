@@ -28,6 +28,12 @@ eye:
   set that drew it (`src`, from the engine's `L.glyphs`) and the adapter must
   keep that field on `baseCharPositions` — it used to rebuild them as `{c, x,
   w}` and drop everything else.
+- **The other half of the certificate.** Matching drawn glyphs is not enough:
+  the reader's orange "To:" line on the startup document drew exactly, yet the
+  reader was right to be unsure — two quote marks on the page were never
+  transcribed. `render.js residualInk` now reports page ink in a line's band
+  that no drawn glyph explains, the Diff paints it orange, and "exact"
+  requires both halves (drawn pixels match, no unexplained ink).
 - **Box halos.** The reader forgives residue touching the ±2-column, ±3-row
   halo around a redaction box (a glyph half-swallowed by the redactor);
   `render.js objectMask` adds those halos to the diff's don't-care zone.

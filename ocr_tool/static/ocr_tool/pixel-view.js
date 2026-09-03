@@ -11,9 +11,11 @@
 // Two toggles in the Auto OCR bar:
 //   MuPDF pixels (#ocr-pixel-view)  raster instead of SVG text, tinted like
 //                                   the SVG text would be, alpha = ink darkness
-//   Diff         (#ocr-pixel-diff)  matching ink pixels faint, pixels that
-//                                   DIFFER from the page solid red — zero red
-//                                   means the text IS the page here
+//   Diff         (#ocr-pixel-diff)  matching ink pixels faint; pixels that
+//                                   DIFFER from the page solid red; page ink
+//                                   the OCR left UNEXPLAINED solid orange —
+//                                   zero red and zero orange means the line
+//                                   IS the page
 //
 // The Diff compares exactly what the reader compared: the viewer's page
 // raster through the same PageEngine buffer and colour whitening, through
@@ -21,7 +23,11 @@
 // NEVER under the reader's object mask or box halos (redaction boxes, rules,
 // their padded rows and the ±2-column halo around a box — a descender dipping
 // into a box's padding, or a glyph half-swallowed by the redactor, is
-// `masked`, not a mismatch). So "0 differ" here means what "byte-clean" means in the reader.
+// `masked`, not a mismatch). Then it runs the reader's residual the other
+// way round: page ink inside the line's band that no drawn glyph explains
+// (a quote mark the reader never transcribed) is reported as `unexplained`.
+// So "exact" here means what "byte-clean" means in the reader — and an
+// orange line the reader was unsure about shows exactly which ink it missed.
 //
 // Attaches to text_tool through ONE guarded seam: svg-renderer.js calls
 // window.utbPixelRender(box, xs, baseline) for every box it draws and shows
@@ -32,17 +38,22 @@ const pixelView = {
   on: false,
   diff: false,
   loading: false,     // glyph sets being fetched (the cache-hit path never loads them)
-  pages: new Map(),   // `${docHash}|${page}` -> { page: whitened {w,h,gray}, mask, quant } | null
-  results: new Map(), // box.id -> { set, ink, count, masked, outside, glyphs }
-  cache: new Map(),   // render key -> { href, x, y, w, h, advanceW, ink, count, masked, outside }
+  pages: new Map(),   // `${docHash}|${page}` -> { page: whitened {w,h,gray}, mask, rawMask, quant } | null
+  results: new Map(), // box.id -> { set, ink, count, within, masked, outside, unexplained, glyphs, phy, tol }
+  windows: new Map(), // box.id -> { page, r } — the last render window of every drawn box
+  cache: new Map(),   // render key -> { href, x, y, w, h, advanceW, ink, count, … }
   notes: new Map(),   // box.id -> why it fell back to SVG
+  dirty: new Set(),   // pages whose residuals must be recomputed
   lastNote: null,
   canvas: null,
+  settleTimer: null,
 };
 
 const PV_TYPE_TINT = { embedded: [0, 100, 255], redaction: [80, 180, 110], harfbuzz: [255, 140, 0], ocr: [0, 200, 255] };
-const PV_DIFF_RGB = [217, 48, 37];
-const PV_MATCH_ALPHA = 0.32;   // diff mode: matching ink pixels are drawn this faint
+const PV_DIFF_RGB = [217, 48, 37];       // drawn pixel that differs from the page
+const PV_RESIDUAL_RGB = [255, 140, 0];   // page ink no drawn glyph explains
+const PV_MATCH_ALPHA = 0.32;             // diff mode: matching ink pixels are drawn this faint
+const PV_BAND_REACH = 40;                // residual columns past a box's end (a missed trailing glyph)
 
 // Family/size lookup for boxes that were NOT read by the OCR (embedded text,
 // hand-added text): a set name is `<stem><style?><lin?><size>`; anything else
@@ -74,16 +85,14 @@ function pvSetByName(name) {
   return ocrToolState.sets?.find(s => s.name === name) || null;
 }
 
-// The set(s) that draw a box: the reader's pick for OCR lines (a union name
-// 'a+b' resolves per glyph through baseCharPositions[i].src), else the
-// family/size match for everything else. Returns {primary, byName, label} or null.
+// The set(s) that draw a box: the reader's pick for OCR lines (a union-pool
+// line reports one font label but each glyph carries the set that drew it —
+// src, from the engine's L.glyphs), else the family/size match for
+// everything else. Returns {primary, byName, label} or null.
 function pvSetsForBox(box) {
   const sets = ocrToolState.sets;
   if (!sets) return null;
   if (box.ocr?.font) {
-    // a union-pool line ('bold label + regular value') reports one font
-    // label but each glyph carries the set that actually drew it (src, from
-    // the engine's L.glyphs) — every set named anywhere on the line is needed
     const names = new Set(box.ocr.font.split('+'));
     for (const cp of box.baseCharPositions || []) if (cp.src) names.add(cp.src);
     const found = [...names].map(pvSetByName).filter(Boolean);
@@ -133,8 +142,8 @@ function pvLayerHidden(box) {
 
 // The page the Diff compares against: the viewer's own <img> for the page,
 // through the same PageEngine buffer + colour whitening the reader used, plus
-// the reader's object mask, so a zero diff here means the same thing as the
-// reader's byte-clean.
+// the reader's object mask (with box halos for the glyph diff, without them
+// for the residual — the reader counts residue inside a halo too).
 function pvPageInfo(pageNum) {
   const key = `${state.docHash}|${pageNum}`;
   if (pixelView.pages.has(key)) return pixelView.pages.get(key);
@@ -155,10 +164,12 @@ function pvPageInfo(pageNum) {
   ocrToolState.engine ??= new PageEngine();
   const raw = ocrToolState.engine._pageFor(img);
   const page = BlindOCR.whitenColored(raw, ocrToolState.engine.pageRGBA(img));
-  const info = { page, mask: null, quant: null };
-  // the reader's don't-care zone: object mask + box halos (render.js objectMask)
-  try { info.mask = OCRRender.objectMask(BlindOCR.detectObjects(page), page.w, page.h); }
-  catch (e) { console.warn('pixel view: detectObjects', e); }
+  const info = { page, mask: null, rawMask: null, quant: null };
+  try {
+    const det = BlindOCR.detectObjects(page);
+    info.rawMask = det.mask;
+    info.mask = OCRRender.objectMask(det, page.w, page.h);
+  } catch (e) { console.warn('pixel view: detectObjects', e); }
   pixelView.pages.set(key, info);
   return info;
 }
@@ -175,26 +186,37 @@ function pvNote(box, why) {
   }
 }
 
-// Render the window as RGBA: tint with alpha = ink darkness; in Diff mode
-// matching (and masked) ink faint, mismatching solid red.
-function pvPaint(r, d, tint, diffMode) {
+// Paint a window as RGBA: tint with alpha = ink darkness; in Diff mode
+// matching (and masked) ink faint, mismatching solid red, unexplained page
+// ink (residual pixels, page coordinates) solid orange. The canvas covers the
+// glyph window extended to hold every residual pixel; returns {href, x, y, w, h}.
+function pvPaint(r, d, tint, diffMode, residual) {
+  let x0 = r.x0, y0 = r.y0, x1 = r.x0 + r.w, y1 = r.y0 + r.h;
+  const res = diffMode && residual?.pixels?.length ? residual.pixels : [];
+  for (const [x, y] of res) { if (x < x0) x0 = x; if (y < y0) y0 = y; if (x + 1 > x1) x1 = x + 1; if (y + 1 > y1) y1 = y + 1; }
+  const w = x1 - x0, h = y1 - y0;
   const c = pixelView.canvas ??= document.createElement('canvas');
-  c.width = r.w; c.height = r.h;
+  c.width = w; c.height = h;
   const ctx = c.getContext('2d');
-  const id = ctx.createImageData(r.w, r.h), px = id.data;
-  for (let i = 0; i < r.w * r.h; i++) {
-    const g = r.gray[i];
-    if (g === 255) continue;
-    const o = i * 4;
-    if (diffMode && d && d.mism[i]) {
-      px[o] = PV_DIFF_RGB[0]; px[o + 1] = PV_DIFF_RGB[1]; px[o + 2] = PV_DIFF_RGB[2]; px[o + 3] = 255;
-    } else {
-      px[o] = tint[0]; px[o + 1] = tint[1]; px[o + 2] = tint[2];
-      px[o + 3] = diffMode ? Math.round((255 - g) * PV_MATCH_ALPHA) : 255 - g;
+  const id = ctx.createImageData(w, h), px = id.data;
+  for (let yy = 0; yy < r.h; yy++)
+    for (let xx = 0; xx < r.w; xx++) {
+      const i = yy * r.w + xx, g = r.gray[i];
+      if (g === 255) continue;
+      const o = ((r.y0 - y0 + yy) * w + (r.x0 - x0 + xx)) * 4;
+      if (diffMode && d && d.mism[i]) {
+        px[o] = PV_DIFF_RGB[0]; px[o + 1] = PV_DIFF_RGB[1]; px[o + 2] = PV_DIFF_RGB[2]; px[o + 3] = 255;
+      } else {
+        px[o] = tint[0]; px[o + 1] = tint[1]; px[o + 2] = tint[2];
+        px[o + 3] = diffMode ? Math.round((255 - g) * PV_MATCH_ALPHA) : 255 - g;
+      }
     }
+  for (const [x, y] of res) {
+    const o = ((y - y0) * w + (x - x0)) * 4;
+    px[o] = PV_RESIDUAL_RGB[0]; px[o + 1] = PV_RESIDUAL_RGB[1]; px[o + 2] = PV_RESIDUAL_RGB[2]; px[o + 3] = 255;
   }
   ctx.putImageData(id, 0, 0);
-  return c.toDataURL('image/png');
+  return { href: c.toDataURL('image/png'), x: x0, y: y0, w, h };
 }
 
 // ── the seam ──────────────────────────────────────────────────
@@ -204,10 +226,10 @@ function pvPaint(r, d, tint, diffMode) {
 function utbPixelRender(box, xs, baseline) {
   if (!pixelView.on || typeof OCRRender === 'undefined') return null;
   if (!ocrToolState.sets) { pvEnsureSets(); return null; }
-  if (!box.text || box.ocr?.unread || pvLayerHidden(box)) { pixelView.results.delete(box.id); return null; }
+  if (!box.text || box.ocr?.unread || pvLayerHidden(box)) { pvForget(box.id); return null; }
   const setInfo = pvSetsForBox(box);
   if (!setInfo) {
-    pixelView.results.delete(box.id);
+    pvForget(box.id);
     pvNote(box, box.ocr?.font ? `set ${box.ocr.font} is not loaded`
       : `no glyph set for ${box.fontFamily}${box.bold ? ' bold' : ''}${box.italic ? ' italic' : ''} ` +
         `${Math.round(box.sizePt * 100) / 100} pt (${(box.sizePt * GEO.docPxPerPt()).toFixed(2)} px) — generate it in tol0 (fontgen) and sync`);
@@ -229,14 +251,14 @@ function utbPixelRender(box, xs, baseline) {
   } else {
     const lay = OCRRender.layoutLine(primary, box.text, box.x, { spaceAdv: pvSpaceAdv(box, primary) });
     if (lay.missing.length) {
-      pixelView.results.delete(box.id);
+      pvForget(box.id);
       pvNote(box, `no glyph for "${lay.missing.join('')}" in ${primary.name}`);
       return null;
     }
     for (const g of lay.glyphs) glyphs.push({ ch: g.ch, pen: g.pen, set: primary });
     advanceW = lay.advanceW;
   }
-  if (!glyphs.length) { pixelView.results.delete(box.id); return null; }
+  if (!glyphs.length) { pvForget(box.id); return null; }
 
   const yb = OCRRender.snapY(baseline);
   const info = pvPageInfo(box.page);
@@ -250,22 +272,103 @@ function utbPixelRender(box, xs, baseline) {
   if (!out) {
     const r = OCRRender.renderLine(primary, glyphs, yb, { phy });
     if (r.missing.length) {
-      pixelView.results.delete(box.id);
+      pvForget(box.id);
       pvNote(box, `no glyph for "${r.missing.join('')}" in ${setInfo.label}${phy ? ` at y-phase ${phy}` : ''}`);
       return null;
     }
     const d = info ? OCRRender.diffLine(r, info.page, box.ocr?.quant ? pvQuant(info) : null, info.mask, tol) : null;
-    out = { href: pvPaint(r, d, tint, pixelView.diff), x: r.x0, y: r.y0, w: r.w, h: r.h, advanceW,
+    out = { r, d, tint, ...pvPaint(r, d, tint, pixelView.diff, null), advanceW,
       ink: d?.ink ?? null, count: d?.count ?? null, within: d?.within ?? 0, masked: d?.masked ?? 0,
       outside: d?.outside ?? 0, glyphs: r.glyphs };
     pixelView.cache.set(key, out);
   }
   pixelView.notes.delete(box.id);
+  pixelView.windows.set(box.id, { page: box.page, r: out.r, d: out.d, tint: out.tint, key });
   pixelView.results.set(box.id, { set: setInfo.label, ink: out.ink, count: out.count, within: out.within,
-    masked: out.masked, outside: out.outside, glyphs: out.glyphs, phy, tol });
+    masked: out.masked, outside: out.outside, unexplained: null, glyphs: out.glyphs, phy, tol });
+  // the residual (page ink no glyph explains) needs every box of the page
+  // drawn first — settle it once this render pass is over
+  pixelView.dirty.add(box.page);
+  clearTimeout(pixelView.settleTimer);
+  pixelView.settleTimer = setTimeout(pvSettle, 0);
   return { href: out.href, x: out.x, y: out.y, w: out.w, h: out.h, advanceW };
 }
 window.utbPixelRender = utbPixelRender;
+
+function pvForget(id) {
+  pixelView.results.delete(id);
+  pixelView.windows.delete(id);
+}
+
+// ── the residual pass ─────────────────────────────────────────
+// For every reader-certified line on a dirty page: page ink in the line's
+// band (rows the reader judged, columns of the box plus a reach past its end
+// up to the next box) that no drawn window on the page inks and no object
+// mask covers. Recomputed after each render pass; in Diff mode the box's
+// image is repainted with those pixels in orange.
+function pvSettle() {
+  clearTimeout(pixelView.settleTimer);
+  pixelView.settleTimer = null;
+  if (!pixelView.on) { pixelView.dirty.clear(); return; }
+  for (const pageNum of pixelView.dirty) {
+    const info = pvPageInfo(pageNum);
+    const wins = [...pixelView.windows.entries()].filter(([, w]) => w.page === pageNum);
+    if (!info) continue;
+    const boxes = wins.map(([id]) => utbState.getBox(id)).filter(Boolean);
+    // the residual's don't-care zone: the object mask plus every redaction
+    // rectangle the reader detected (its per-line box detection sees slices
+    // the page-level pass misses), padded 2 px like the reader's line boxes
+    let resMask = info.rawMask;
+    const rects = utbState.boxes.filter(b => b.type === 'redaction' && b.ocrSource && b.page === pageNum);
+    if (rects.length && resMask) {
+      resMask = new Uint8Array(resMask);
+      const W = info.page.w, H = info.page.h;
+      for (const b of rects) {
+        const x0 = Math.max(0, Math.floor(b.x) - 2), x1 = Math.min(W, Math.ceil(b.x + b.w) + 2);
+        for (let y = Math.max(0, Math.floor(b.y) - 2); y < Math.min(H, Math.ceil(b.y + b.h) + 2); y++)
+          resMask.fill(1, y * W + x0, y * W + x1);
+      }
+    }
+    for (const [id, w] of wins) {
+      const box = utbState.getBox(id), res = pixelView.results.get(id);
+      if (!box || !res) continue;
+      if (!box.ocr || box.ocr.top == null || box.ocr.baseline == null) { res.unexplained = null; continue; }
+      // the reader certifies this half itself: a clean line has residual 0 by
+      // its own bookkeeping (skip rules around box edges that only the scan
+      // knows), so the residual is located only on lines it marked unclean
+      res.residual = box.ocr.residual ?? 0;
+      if (box.ocr.clean || !(box.ocr.residual > 0)) { res.unexplained = 0; continue; }
+      // rows: exactly the ones the reader judged — from the band top (never
+      // above it: ink up there is the previous line's) down to baseline +
+      // maxDesc of the line's set(s), the scan window's bottom (a redaction
+      // box's bottom AA row one pixel further down is not this line's ink)
+      const sets = [...(pvSetsForBox(box)?.byName.values() || [])];
+      const asc = Math.max(0, ...sets.map(s => s.maxAsc)), desc = Math.max(0, ...sets.map(s => s.maxDesc));
+      const yb = box.ocr.baseline;
+      // columns: this box, plus a reach past its end that stops at the next
+      // box sharing its rows
+      let x1 = box.x + box.w + PV_BAND_REACH;
+      for (const b of boxes)
+        if (b !== box && b.x > box.x + box.w - 1 && b.y < box.y + box.h && b.y + b.h > box.y) x1 = Math.min(x1, b.x);
+      const band = { top: Math.max(box.ocr.top, yb - asc), bot: yb + desc, x0: box.x - 2, x1 };
+      const residual = OCRRender.residualInk(info.page, resMask, band, wins.map(([, o]) => o.r));
+      const changed = res.unexplained !== residual.count;
+      res.unexplained = residual.count;
+      if (pixelView.diff && (residual.count || changed)) {
+        const p = pvPaint(w.r, w.d, w.tint, true, residual);
+        const img = document.querySelector(`.utb-group[data-id="${id}"] .utb-pixel`);
+        if (img) {
+          img.setAttribute('x', p.x); img.setAttribute('y', p.y);
+          img.setAttribute('width', p.w); img.setAttribute('height', p.h);
+          img.setAttribute('href', p.href);
+        }
+      }
+    }
+  }
+  pixelView.dirty.clear();
+  if (pixelView.on && utbState.selectedId && pixelView.results.has(utbState.selectedId)) pvReportSelection();
+  else if (pixelView.on) pvReportPage();
+}
 
 // ── toggles, status, lifecycle ────────────────────────────────
 
@@ -282,13 +385,15 @@ async function pvEnsureSets() {
   } finally {
     pixelView.loading = false;
   }
-  if (pixelView.on) { window.renderAllTextLayers?.(); pvReportPage(); }
+  if (pixelView.on) { window.renderAllTextLayers?.(); pvSettle(); }
 }
 
 function pvInvalidate() {
   pixelView.cache.clear();
   pixelView.results.clear();
+  pixelView.windows.clear();
   pixelView.notes.clear();
+  pixelView.dirty.clear();
   pixelView.lastNote = null;
 }
 
@@ -301,7 +406,7 @@ function pvSetOn(on) {
   if (diffBtn) { diffBtn.disabled = !pixelView.on; diffBtn.classList.toggle('active', pixelView.diff); }
   if (pixelView.on && !ocrToolState.sets) pvEnsureSets();
   window.renderAllTextLayers?.();
-  if (pixelView.on && ocrToolState.sets) pvReportPage();
+  if (pixelView.on && ocrToolState.sets) pvSettle();
   else if (!pixelView.on) setOcrStatus('MuPDF pixels off');
 }
 
@@ -311,19 +416,22 @@ function pvSetDiff(diff) {
   pvInvalidate();
   document.getElementById('ocr-pixel-diff')?.classList.toggle('active', pixelView.diff);
   window.renderAllTextLayers?.();
-  pvReportPage();
+  pvSettle();
 }
 
 // verdicts for the current page, split the way they should be read: lines
-// the reader certified byte-clean must reproduce the page exactly; anything
-// else (embedded text, hand-added boxes, tolerant reads) is drawn where its
-// box says and compared, but a difference there is information, not a fault
+// the reader certified byte-clean must reproduce the page exactly AND leave
+// no page ink unexplained; anything else (embedded text, hand-added boxes,
+// tolerant reads, the reader's own unclean lines) is drawn where its box
+// says and compared, but a difference there is information, not a fault
+const pvExact = r => r.count === 0 && r.ink > 0 && !r.unexplained;
 function pvPageVerdict(pageNum) {
+  if (pixelView.dirty.size) pvSettle();
   const rows = [...pixelView.results.entries()]
     .map(([id, r]) => ({ box: utbState.getBox(id), r }))
     .filter(x => x.box && x.box.page === pageNum);
   const cert = rows.filter(x => x.box.ocr?.clean), other = rows.filter(x => !x.box.ocr?.clean);
-  const exact = xs => xs.filter(x => x.r.count === 0 && x.r.ink > 0).length;
+  const exact = xs => xs.filter(x => pvExact(x.r)).length;
   const fallbacks = [...pixelView.notes.keys()].filter(id => utbState.getBox(id)?.page === pageNum).length;
   return { drawn: rows.length, cert: cert.length, certExact: exact(cert),
     other: other.length, otherExact: exact(other), fallbacks };
@@ -347,8 +455,10 @@ function pvReportSelection() {
   if (!r) { setOcrStatus(`MuPDF pixels: "${short}" drawn as SVG (${pixelView.notes.get(id) || 'no glyph set'})`); return; }
   setOcrStatus(`MuPDF pixels: "${short}" · ${r.set} · ${r.ink ?? '?'} ink px · ` +
     (r.count === null ? 'page raster not loaded'
-      : r.count === 0 ? (r.tol ? `matches the page within ±${r.tol}` : 'matches the page exactly')
-      : `${r.count} differ${r.tol ? ` beyond ±${r.tol}` : ''}`) +
+      : r.count === 0 ? (r.tol ? `drawn glyphs match the page within ±${r.tol}` : 'drawn glyphs match the page exactly')
+      : `${r.count} drawn px differ${r.tol ? ` beyond ±${r.tol}` : ''}`) +
+    (r.residual ? ` · the reader left ${r.residual} px of page ink unexplained — it missed something here` +
+      (r.unexplained ? ` (${r.unexplained} px located, orange in Diff)` : '') : '') +
     (r.within ? ` · ${r.within} within tolerance` : '') +
     (r.masked ? ` · ${r.masked} under a box/rule` : '') +
     (r.phy ? ` · y-phase ${r.phy}` : '') +
@@ -369,8 +479,9 @@ function pvReportSelection() {
   new MutationObserver(() => {
     if (!pixelView.on) return;
     pixelView.results.clear();
+    pixelView.windows.clear();
     window.renderAllTextLayers?.();
-    pvReportPage();
+    pvSettle();
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 })();
 
@@ -380,10 +491,12 @@ PDFHooks.on('document:loaded', () => {
 });
 
 // Programmatic entry point (headless tests): report() lists every box drawn
-// as pixels with its diff verdict; verdict(page) sums them up per page.
+// as pixels with its diff verdict; verdict(page) sums them up per page. Both
+// settle the residual pass first, so their numbers are final.
 window.PixelView = {
-  state: pixelView, setOn: pvSetOn, setDiff: pvSetDiff, verdict: pvPageVerdict,
+  state: pixelView, setOn: pvSetOn, setDiff: pvSetDiff, verdict: pvPageVerdict, settle: pvSettle,
   report() {
+    if (pixelView.dirty.size) pvSettle();
     return [...pixelView.results.entries()].map(([id, r]) => {
       const b = utbState.getBox(id);
       return { id, page: b?.page ?? null, text: b?.text ?? '', clean: b?.ocr?.clean ?? null,

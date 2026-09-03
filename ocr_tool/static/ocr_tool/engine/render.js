@@ -244,7 +244,36 @@
     return page;
   }
 
-  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, renderLine, objectMask, diffLine, paste };
+  // ---- the other half of the certificate: ink the drawing does not explain ----
+  // diffLine asks "is every drawn pixel the page?"; this asks "is every page
+  // pixel in the line's band drawn?" — the reader's residual. band = {top,
+  // bot, x0, x1} in page coordinates (the reader's L.top/L.bot rows, the
+  // box's columns); windows = renderLine results whose ink explains pixels
+  // (this line's, plus neighbours whose glyphs reach into the band); mask =
+  // detectObjects' mask WITHOUT halos (the reader counts residue inside a halo
+  // too — that is what makes a clipped quote mark an unclean line). Returns
+  // {count, pixels:[[x,y,byte]…]} — page ink (< 255) that no window inks and
+  // no mask covers. A clean reader line has count 0 here by construction.
+  function residualInk(page, mask, band, windows) {
+    const pixels = [];
+    const x0 = Math.max(0, band.x0 | 0), x1 = Math.min(page.w, Math.ceil(band.x1));
+    const y0 = Math.max(0, band.top | 0), y1 = Math.min(page.h, Math.ceil(band.bot));
+    for (let y = y0; y < y1; y++) {
+      for (let x = x0; x < x1; x++) {
+        const i = y * page.w + x, pv = page.gray[i];
+        if (pv >= 255 || (mask && mask[i])) continue;
+        let inked = false;
+        for (const r of windows) {
+          const rx = x - r.x0, ry = y - r.y0;
+          if (rx >= 0 && ry >= 0 && rx < r.w && ry < r.h && r.gray[ry * r.w + rx] < 255) { inked = true; break; }
+        }
+        if (!inked) pixels.push([x, y, pv]);
+      }
+    }
+    return { count: pixels.length, pixels };
+  }
+
+  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, renderLine, objectMask, diffLine, residualInk, paste };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OCRRender = api;
 })(typeof self !== 'undefined' ? self : this);

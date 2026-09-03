@@ -136,7 +136,7 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
 | Tooltip | id | What it does |
 |---|---|---|
 | Show text as MuPDF pixels | `ocr-pixel-view` | Every text box is drawn from the reader's own glyph bitmaps on mupdf's ¼-px pen lattice and whole-pixel baseline, instead of SVG text — the raster mupdf would have produced. Tinted like the SVG text (alpha = ink darkness); pixelated when zoomed. |
-| Highlight pixels that differ from the page | `ocr-pixel-diff` | Matching ink pixels go faint, pixels whose predicted byte differs from the page turn solid red. The status line reports `OCR lines n/m exact` (reader-certified lines, which must all be exact — within the reader's own ±tol when a line was read on a tolerant rung) and `other boxes n/m exact` (embedded / hand-added text, compared but not expected to match) for the page and, on selection, the box's ink-pixel and differing-pixel counts. |
+| Highlight pixels that differ from the page | `ocr-pixel-diff` | Matching ink pixels go faint, pixels whose predicted byte differs from the page turn solid red, and page ink inside the line's band that no drawn glyph explains turns solid orange (the reader's residual — a quote mark it never transcribed). The status line reports `OCR lines n/m exact` (reader-certified lines, which must all be exact — within the reader's own ±tol when a line was read on a tolerant rung) and `other boxes n/m exact` (embedded / hand-added text, compared but not expected to match) for the page and, on selection, the box's ink-pixel and differing-pixel counts. |
 
 - **Which glyph set draws a box.** OCR lines: the set the reader picked
   (`box.ocr.font`; a union name resolves per glyph through
@@ -150,6 +150,16 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
   read on (`box.ocr.tol`: byte-exact at 0; |Δ| ≤ tol, 2·tol on composite
   pixels, otherwise — scanLine's rule). "Exact" in the status line means
   exact to that standard.
+- **Both halves of the certificate.** The renderer proves one direction:
+  every drawn pixel is the page. The reader proves the other: no ink in the
+  band was left unexplained (`box.ocr.residual`, its own residual count —
+  `clean` means no failure columns and residual 0). "Exact" needs both. For a
+  line the reader marked unclean (orange text), the Diff locates the leftover
+  ink with `render.js residualInk` (page ink in the reader's judged rows that
+  no drawn glyph covers, outside the object mask and the detected redaction
+  rectangles) and paints it orange; the status line quotes the reader's own
+  count. The location is a rebuild of the reader's bookkeeping and can differ
+  by a few fringe pixels around a redaction box; the count is the reader's.
 - **Pens.** Measured pens (plus nudges and space overrides) when the box has
   per-character positions; otherwise a fresh layout from `box.x` through
   `render.js layoutLine` with the set's advances. Spaces use the reader's

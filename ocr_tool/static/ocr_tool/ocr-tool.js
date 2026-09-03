@@ -198,6 +198,12 @@ function ocrAddBoxes(pageNum, img, res, pass) {
         // the y-phase records the reader pinned the line to (0, or 0.5 on a
         // legacy set) — the pixel view re-draws with the same records
         phy: L.phy ?? 0,
+        // the band the reader judged (rows) — the pixel view's residual check
+        // looks for page ink here that no drawn glyph explains
+        top: L.top, bot: L.bot,
+        // the reader's own residual: ink pixels in the band it could not explain
+        // (clean ⇔ no fails and residual 0)
+        residual: L.residual ?? 0,
         // the page-calibrated space advance (engine spaceCalib) — what a
         // re-layout of edited text uses for its spaces
         spaceAdv: res.spaceAdv ?? null };
@@ -238,7 +244,7 @@ function ocrSlimResult(res) {
   return {
     lines: (res.lines || []).map(L => ({
       text: L.text, font: L.font, baseline: L.baseline, top: L.top, bot: L.bot,
-      phy: L.phy ?? 0, clean: !!L.clean,
+      phy: L.phy ?? 0, clean: !!L.clean, residual: L.residual ?? 0,
       fails: Array.from(L.fails || []),
       boxes: (L.boxes || []).map(b => Array.from(b)),
       set: L.set ? { maxAsc: L.set.maxAsc, maxDesc: L.set.maxDesc, sizePx: L.set.sizePx } : null,
