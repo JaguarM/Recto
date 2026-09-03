@@ -262,7 +262,7 @@
       }
     }
     const { lines: kept, objects } = await Engine.readPage(page, sets,
-      { tol: opts?.tol, quant: opts?.quant, carry, progress: opts?.progress });
+      { tol: opts?.tol, quant: opts?.quant, shadow: opts?.shadow, carry, progress: opts?.progress });
     const spaceAdv = Engine.spaceCalib(kept);
     for (const L of kept) {
       const { entries, text } = lineEntries(L, spaceAdv);

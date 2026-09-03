@@ -389,9 +389,18 @@
     // sparse ink gets NO padding: that ink is a glyph's evidence, not the
     // object's (a blanket ±2 pad swallowed real "," ":" "." ">" pressed against
     // redaction boxes — real, byte-clean text).
-    const sideAA = (vals) => {
+    const sideAA = (vals, colEdge) => {
       const ink = vals.filter(v => v < 255);
       if (!ink.length || ink.length < 0.9 * vals.length) return false;
+      if (colEdge) {
+        // a COLUMN beside a box is shadowed by the text under the box on up
+        // to half its rows (EDGE MODEL): the bar's byte is the most frequent
+        // value, and a third of the rows carrying it is the vote
+        const n = new Map();
+        let c = 0;
+        for (const v of ink) { const k = (n.get(v) ?? 0) + 1; n.set(v, k); if (k > c) c = k; }
+        return c >= Math.max(3, vals.length / 3);
+      }
       ink.sort((a, b) => a - b);
       const mode = ink[ink.length >> 1];
       return ink.filter(v => Math.abs(v - mode) <= 3).length >= 0.6 * vals.length;
@@ -419,6 +428,7 @@
     // 18 byte-exact pixels, 44 destroyed — and among 4,516 pool candidates
     // anchored there exactly one glyph fits).
     const edge = new Uint8Array(w * h);
+    const edgeV = new Uint8Array(w * h);   // 1 where the edge cell belongs to a left/right edge COLUMN
     const rowIvs = new Array(h);           // per-row masked x-intervals [x0,x1) — lets the
                                            // dust pass split raw runs without reading mask bytes
     const mRows = new Uint8Array(h);       // per-row "mask has cells here" flag —
@@ -444,8 +454,9 @@
       // the sole-span vote as a replacement instead denied it elsewhere (`big`
       // grew a third box fragment).
       const edgeRow = y => sideAA(row(y)) || sideAA(row(y, true));
-      const x0 = o.x0 > 0 && sideAA(col(o.x0 - 1)) ? o.x0 - 1 : o.x0;
-      const x1 = o.x1 < w && sideAA(col(o.x1)) ? o.x1 + 1 : o.x1;
+      const box = o.type === 'box';
+      const x0 = o.x0 > 0 && sideAA(col(o.x0 - 1), box) ? o.x0 - 1 : o.x0;
+      const x1 = o.x1 < w && sideAA(col(o.x1), box) ? o.x1 + 1 : o.x1;
       const y0 = o.type === 'box' ? (o.y0 > 0 && edgeRow(o.y0 - 1) ? o.y0 - 1 : o.y0)
         : Math.max(0, o.y0 - 2);
       const y1 = o.type === 'box' ? (o.y1 < h && edgeRow(o.y1) ? o.y1 + 1 : o.y1)
@@ -459,14 +470,26 @@
       if (o.type === 'box') {
         // edge lines (EDGE MODEL above): from each side's padded boundary walk
         // inward; every near-constant NON-black line is an edge and its cells
-        // take the line's mode; stop at the black body or at a line that does
-        // not vote (a stacked neighbour's shared row stays body — no evidence).
-        // Corner cells sit under two edges at once and their byte is neither
-        // line's: they stay body.
-        const lineMode = vals => {
+        // take the line's mode — a dark edge (74, 52: the bar placed ~¼ px
+        // over the glyph) compresses the glyph into 0..74 but keeps it; stop
+        // at the black body or at a line that does not vote (a stacked
+        // neighbour's shared row stays body — no evidence). Corner cells sit
+        // under two edges at once and their byte is neither line's: they
+        // stay body.
+        // A ROW edge votes like the padding does (60 % within ±3 of the
+        // median). A COLUMN edge is shadowed by whatever text runs under the
+        // bar — a cap-height glyph darkens 12 of a 26-row bar's edge cells —
+        // so its bar byte is the MOST FREQUENT value, required on a third of
+        // the rows: the column adjoins the black body, it is the bar's edge
+        // by construction, the question is only which byte is the bar's own.
+        const lineMode = (vals, colEdge) => {
           const ink = vals.filter(v => v < 255);
           if (!ink.length || ink.length < 0.9 * vals.length) return -1;
-          const s = [...ink].sort((a, b) => a - b), m = s[s.length >> 1];
+          const n = new Map();
+          for (const v of ink) n.set(v, (n.get(v) ?? 0) + 1);
+          let m = -1, c = 0;
+          for (const [v, k] of n) if (k > c) { m = v; c = k; }
+          if (colEdge) return c >= Math.max(3, vals.length / 3) ? m : -1;
           return ink.filter(v => Math.abs(v - m) <= 3).length >= 0.6 * vals.length ? m : -1;
         };
         const colV = x => { const v = []; for (let y = y0; y < y1; y++) v.push(gray[y * w + x]); return v; };
@@ -475,16 +498,19 @@
         const walkRows = (from, step) => {
           for (let y = from, k = 0; y >= y0 && y < y1 && k < 3; y += step, k++) {
             const m = lineMode(rowV(y));
-            if (m < 160) break;                        // dark: the body's own AA, no evidence
+            if (m <= 0) break;                         // black: the body
             for (let x = x0; x < x1; x++) edge[y * w + x] = m;
             rowsDone.add(y);
           }
         };
         const walkCols = (from, step) => {
           for (let x = from, k = 0; x >= x0 && x < x1 && k < 3; x += step, k++) {
-            const m = lineMode(colV(x));
-            if (m < 160) break;
-            for (let y = y0; y < y1; y++) edge[y * w + x] = rowsDone.has(y) ? 0 : m;
+            const m = lineMode(colV(x), true);
+            if (m <= 0) break;
+            for (let y = y0; y < y1; y++) {
+              edge[y * w + x] = rowsDone.has(y) ? 0 : m;
+              if (!rowsDone.has(y)) edgeV[y * w + x] = 1;
+            }
           }
         };
         walkRows(y0, 1); walkRows(y1 - 1, -1);
@@ -655,6 +681,7 @@
     }
     mask._rows = mRows;
     mask._edge = edge;
+    mask._edgeV = edgeV;
     return { mask, objects };
   }
 
@@ -810,7 +837,13 @@
   // space.
   function scanLine(page, mask, set, phy, baseline, xFrom, xTo, maxGlyphs = Infinity,
     maxFails = Infinity, TOL = 0, QUANT = null, halos = null, bandTop = null,
-    explained = null, bandBot = null) {
+    explained = null, bandBot = null, opts = null) {
+    // opts.shadow: read glyphs from their SHADOW alone (no ink on the open
+    // page) and treat DARK edge lines (< 160) as edges. Off by default —
+    // measured on the gate's real boxes it read 'm' right and '0', '.', '|'
+    // wrong (docs/LAWS.md §8), and dark edges slip by one byte in two
+    // producers' box compositors (a 147 predicted for a 148, a 40 for a 41).
+    const shadowOpt = !!(opts && opts.shadow);
     const inHalo = (x, y) => halos && halos.some(h => x >= h[0] && x < h[1] && y >= h[2] && y < h[3]);
     const q = QUANT ? v => QUANT[v] : v => v;           // palette law (see quantMap)
     const lin = set.linear;
@@ -836,7 +869,8 @@
     // holds the edge's own byte as prior ink, so a glyph under it is judged on
     // the composite it must leave there
     const isEdge = new Uint8Array(bw * bh);
-    const edgeMap = mask._edge ?? null;
+    const isEdgeV = new Uint8Array(bw * bh);   // column-edge cells: where a SHADOW anchor may sit
+    const edgeMap = mask._edge ?? null, edgeVMap = mask._edgeV ?? null;
     const colInk = new Int16Array(256), colOpen = new Int16Array(256);   // tryCand scratch, per glyph column
     const pageAt = (x, y) => page.gray[y * W + x];
     const masked = (x, y) => skip[(y - y0) * bw + (x - xFrom)];
@@ -895,8 +929,9 @@
               skip[co + x] = 1;
             } else if (hasM && mask[po + x]) {
               const ev = edgeMap ? edgeMap[po + x] : 0;
-              if (ev) {                                // bar edge: prior ink, judged
+              if (ev && (ev >= 160 || shadowOpt)) {    // bar edge: prior ink, judged
                 canvas[co + x] = ev; isEdge[co + x] = 1;
+                if (edgeVMap && edgeVMap[po + x]) isEdgeV[co + x] = 1;
                 if (lin && ev >= 129 && ev !== 255) shifts[co + x] = 1;
               } else {                                 // body, rule, dust: don't-care
                 canvas[co + x] = g[po + x];
@@ -973,20 +1008,24 @@
       const { inkC, inkR, inkB, inkA } = g, nInk = inkC.length;
       const rowBase = gy * W + gx, canBase = (gy - y0) * bw + (gx - xFrom);
       for (let c = 0; c < g.w; c++) { colInk[c] = 0; colOpen[c] = 0; }
+      let anchorHit = 0, overlap = 0, edgeN = 0;
+      const anchorRel = col - gx;
       for (let k = 0; k < nInk; k++) {
         const cc = inkC[k], rr = inkR[k];
         const pOff = rowBase + rr * W + cc;
         const ci = canBase + rr * bw + cc, sk = skip[ci];
         colInk[cc]++;
         if (sk) { skipped++; if (sk !== 3) foreign = true; continue; }  // object/absorbed pixel: no evidence either way
-        if (!isEdge[ci]) colOpen[cc]++;
+        if (isEdge[ci]) edgeN++;
+        else if (canvas[ci] === 0) overlap++;            // composite over black: any glyph passes, no evidence
+        else colOpen[cc]++;
         const gb = inkB[k], pv = page.gray[pOff], cv = canvas[canBase + rr * bw + cc];
         // fresh-canvas fast path (the overwhelmingly common case, non-linear
         // law): blending the glyph's alpha over white reproduces gb by
         // construction — pred === gb — so one compare suffices
         if (cv === 255 && !linG && !DBG_PIX) {
           const d = QUANT ? QUANT[gb] : gb;
-          if (pv >= d - TOL && pv <= d + TOL) exact++;
+          if (pv >= d - TOL && pv <= d + TOL) { exact++; if (cc === anchorRel) anchorHit++; }
           else if (pv < d - TOL) pending++;              // darker: future glyph may composite
           else return null;
           continue;
@@ -1007,7 +1046,9 @@
             if (p < lo) lo = p;
             if (Math.abs(q(p) - pv) <= (TOL ? 2 * TOL : 0)) ok = true;
           }
-          if (ok) exact++;
+          if (DBG_PIX && HAS_ENV && +process.env.BR_PIX === col && !ok)
+            console.log(`      edge '${g.ch}' pen ${pi + g.phx} @(${gx + cc},${gy + rr}) gb=${gb} edge=${cv} k=${kLo}..${kHi} pred=${lo} pv=${pv}`);
+          if (ok) { exact++; if (cc === anchorRel) anchorHit++; }
           else if (pv < q(lo)) pending++;
           else return null;
           continue;
@@ -1039,7 +1080,7 @@
         }
         if (DBG_PIX && HAS_ENV && +process.env.BR_PIX === col && !hit)
           console.log(`      pix '${g.ch}' pen ${pi + g.phx} @(${gx + cc},${gy + rr}) gb=${gb} cv=${cv} pv=${pv} minPred=${minPred}`);
-        if (hit) exact++;
+        if (hit) { exact++; if (cc === anchorRel) anchorHit++; }
         else if (pv < q(minPred) - t) pending++;         // darker: future glyph may composite
         else return null;
       }
@@ -1047,25 +1088,66 @@
       // solid ink shows up as mostly-pending and must not be accepted; a glyph
       // mostly inside an object mask has no evidence and is rejected too
       const considered = nInk - skipped;
-      let clipped = false;
-      if (considered < nInk * 0.5) {
+      let clipped = false, shadow = false;
+      // VISIBLE ink is what lies on the open page; an edge composite supports
+      // a read but cannot make a glyph visible (a '.' whose whole body sits in
+      // a box's edge column read through the normal path on v3 — wrongly)
+      if (considered - edgeN < nInk * 0.5) {
         // CLIPPED by a box: most of the glyph is under a black body. It is a
         // candidate only if every hidden pixel is body (never fail-absorbed
         // residue or another line's ink), every visible pixel is byte-exact
         // and none is pending — and the anchor loop accepts it only when it
         // is the ONLY character in the pool that fits (see there).
         if (foreign || !considered || pending || exact !== considered) return null;
+        // it may not sit on ink another glyph already explained (any
+        // composite over black passes for free), and it must account for
+        // EVERY unexplained pixel of its anchor column: a candidate that
+        // explains one pixel of a nine-pixel shadow is not the glyph (the
+        // '!' that fitted one pixel of an 'e', the '.' one of a 't')
+        if (overlap || anchorHit !== anchorNeed) {
+          if (DBG_LINE !== null && DBG_LINE === baseline && maxGlyphs === Infinity)
+            console.log(`    reject clipped '${g.ch}' pen ${pi + g.phx} (anchor ${col}): overlap ${overlap}, anchor hits ${anchorHit} of ${anchorNeed} unexplained, ${exact} exact / ${skipped} hidden`);
+          return null;
+        }
         // …and it must LEAK: at least one complete ink column on the open
-        // page, outside body and edge alike. Composite-only evidence (a
-        // glyph the body destroyed but for its edge shadow) is refused —
-        // that is where a sweep would start inventing letters.
+        // page, outside body and edge alike — unless this anchor is a SHADOW
+        // anchor (an edge column whose composite nothing explained, see the
+        // main loop): then the shadow alone may carry it, still only when
+        // exact everywhere and unique in the pool.
         let leaks = false;
         for (let c = 0; c < g.w && !leaks; c++) if (colInk[c] && colOpen[c] === colInk[c]) leaks = true;
-        if (!leaks) return null;
+        if (!leaks && !shadowAnchor) return null;
+        // a shadow-only fit rests on one column: under 3 deviating pixels it
+        // is an accident waiting to happen (clip-bench: the only wrong shadow
+        // reads on a Courier page were 1-pixel fits at the darkest edges,
+        // an 'i' read as '!'), so that is the floor
+        if (!leaks && anchorNeed < 3) return null;
         clipped = true;
+        shadow = !leaks;
       } else if (exact < considered * 0.5 || pending > considered * 0.35) return null;
       if (accepted.has(`${g.ch}@${pi + g.phx}`)) return null;  // after the pixel work: rare
-      return { g, pi, gx, gy, exact, pending, score: exact - pending * 0.25, clipped, hidden: skipped };
+      return { g, pi, gx, gy, exact, pending, score: exact - pending * 0.25, clipped, shadow, hidden: skipped };
+    };
+    // SHADOW anchors: a column-edge cell (the bar's left or right AA column)
+    // whose page byte is not the bar's own — a glyph under the bar is showing
+    // through — and which no accepted glyph has explained. Visited once each,
+    // after every open anchor of the line is settled.
+    let shadowAnchor = false, anchorNeed = 0;
+    const needAt = (x) => {                      // unexplained pixels in column x (band rows)
+      let n = 0;
+      for (let y = cTop; y < cBot; y++) {
+        const i = (y - y0) * bw + (x - xFrom);
+        if (!skip[i] && page.gray[y * W + x] !== q(canvas[i])) n++;
+      }
+      return n;
+    };
+    const nextShadow = (fromX) => {
+      for (let x = Math.max(fromX, xFrom); x < xTo; x++)
+        for (let y = cTop; y < cBot; y++) {
+          const i = (y - y0) * bw + (x - xFrom);
+          if (isEdgeV[i] && page.gray[y * W + x] !== q(canvas[i])) return x;
+        }
+      return -1;
     };
     // does the ink at this anchor touch a box (body or edge) on its left?
     const touchesBox = (col) => {
@@ -1093,13 +1175,19 @@
     let failGuard = -1;                     // right edge of the last failed blob
     let flVis = null, flGen = 0;            // flood visited map (lazy, generation-stamped)
     const accepted = new Set();                          // "ch@pen" — never re-accept
-    let cursor = xFrom;
+    let cursor = xFrom, shadowCursor = xFrom;
     let chainPenQ = null;                   // expected next pen (¼-px units) after an accept
     const mk = new Int32Array(16);          // chain-probe column masks, cols col-2..col+1
                                             // (4 ints per column: ink m0/m1, dark q0/q1)
     while (glyphs.length < maxGlyphs) {
-      const col = nextUnexplained(cursor);
+      let col = nextUnexplained(cursor);
+      shadowAnchor = false;
+      if (col < 0 && shadowOpt && maxGlyphs === Infinity) {   // opt-in, final scans only: shadows last
+        col = nextShadow(shadowCursor);
+        if (col >= 0) { shadowAnchor = true; shadowCursor = col + 1; }
+      }
       if (col < 0) break;
+      anchorNeed = needAt(col);
       let best = null;
       const clipped = [];                    // box-clipped passes (see tryCand)
       // advance chaining: within a word the next pen is the previous pen +
@@ -1186,7 +1274,7 @@
       // left, sweep every candidate with its first ink column back under the
       // box (exhaustive — only box-adjacent anchors ever pay, and a wrong
       // candidate dies on its first visible pixel).
-      if (!best && touchesBox(col)) {
+      if (!best && (shadowAnchor || touchesBox(col))) {
         for (const g of cands)
           for (let f = col - g.w + 1; f < col - 2; f++) {
             const r = tryCand(g, f - g.dx - g.inkLeft, col);
@@ -1206,6 +1294,7 @@
           for (const r of clipped)
             if (!best || r.score > best.score || (r.score === best.score && r.g._i < best.g._i)) best = r;
       }
+      if (!best && shadowAnchor) continue;          // a shadow nobody fits: not a fail, not a □
       if (!best) {
         // rasterizer-variance dust: an older rasterizer may spread a curve a
         // pixel wider than our raster, and at glyph junctions (f-hook ∩ i-dot)
@@ -1348,9 +1437,10 @@
       }
       if (DBG_LINE !== null && DBG_LINE === baseline && maxGlyphs === Infinity)
         console.log(`    accept '${g.ch}' pen ${pi + g.phx} exact ${best.exact} pend ${best.pending} (anchor ${col})` +
-          (best.clipped ? ` CLIPPED ${best.hidden} px under a box` : ''));
+          (best.clipped ? ` CLIPPED ${best.hidden} px under a box${best.shadow ? ', SHADOW only' : ''}` : ''));
       glyphs.push({ ch: g.ch, pen: pi + g.phx, adv: g.adv, exact: best.exact, pending: best.pending,
-        ...(g.src ? { src: g.src } : {}), ...(best.clipped ? { clip: best.hidden } : {}) });
+        ...(g.src ? { src: g.src } : {}), ...(best.clipped ? { clip: best.hidden } : {}),
+        ...(best.shadow ? { shadow: true } : {}) });
       accepted.add(`${g.ch}@${pi + g.phx}`);
       chainPenQ = Math.round((pi + g.phx + g.adv) * 4);  // expected next pen on the ¼-px lattice
       cursor = col + 1;   // pending overlap columns right of col are revisited; the
@@ -1392,6 +1482,10 @@
         failPix.get(fails[fails.length - 1])?.push(...dead);  // same □ blob, merged
       }
     }
+    // shadow anchors are visited after every open anchor, so a glyph read from
+    // its shadow was pushed out of pen order: restore it (every consumer reads
+    // the list left to right)
+    glyphs.sort((a, b) => a.pen - b.pen);
     // coverage certificate: any non-object band pixel the composition law
     // could not reproduce byte-exactly? unexpl[] already carries the running
     // count (masked cells are pre-seeded to canvas=page, so they never
@@ -1748,7 +1842,8 @@
         }
       }
       const L = scanLine(page, mask, pick.set, pick.phy, pick.yb,
-        Math.max(0, x0 - 2), Math.min(page.w, x1 + 4), Infinity, Infinity, tol, quant, halos, top, explained, clampBot);
+        Math.max(0, x0 - 2), Math.min(page.w, x1 + 4), Infinity, Infinity, tol, quant, halos, top, explained, clampBot,
+        opts?.shadow ? { shadow: true } : null);
       // a "line" that read NOTHING has no certified baseline — it is an unread
       // band (a dot-only band above a real line probes into that line's glyphs
       // through the +20px window, picks a shifted-but-equivalent baseline, then
