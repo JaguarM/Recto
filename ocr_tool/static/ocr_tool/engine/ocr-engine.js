@@ -273,7 +273,7 @@
     for (let i = objects.length - 1; i >= 0; i--) {
       const o = objects[i];
       if (o.vr || o.sb || o.y1 - o.y0 <= 4) continue;
-      const ext = [];                                    // per-row [y, x0, x1]
+      let ext = [];                                      // per-row [y, x0, x1]
       for (const r of rows)
         if (r.y >= o.y0 && r.y < o.y1 && r.x1 > o.x0 && r.x0 < o.x1) {
           const e = ext.length && ext[ext.length - 1][0] === r.y ? ext[ext.length - 1] : null;
@@ -281,6 +281,42 @@
           else ext.push([r.y, r.x0, r.x1]);
         }
       if (!ext.length) continue;
+      // Bar-body column profile. A glyph glued to the box's side — a quote
+      // mark flush against a redaction bar, the tip of a '<' — is bridged
+      // into that row's dark run across a ≤1px AA gap, so the row's raw
+      // extent runs past the bar body; a few such rows then split the box
+      // into thin slices, and a slice under 5 rows is typed a RULE whose
+      // blanket ±2-row padding swallows the glyph outright (EFTA00434905 p1
+      // y90, `To: "…" <…`: both quotes gone, and the right bar's lower slice
+      // lost its edge padding to the '<' tip — its own AA column stayed
+      // unexplained as residual 6). The bar body is distinguishable from
+      // anything glued to it: its columns are dark on EVERY body row, while
+      // an x-height glyph touches on ~7 at most (the small-box stack floor
+      // above, x-height ≈ 7 at 16px). Clip each row's extent INWARD to
+      // columns dark on ≥ min(8, body rows) of the box's rows — the raw
+      // extent still decides which rows belong to the box, only the edge
+      // moves. A genuinely wider stacked box keeps its protrusion (dark on
+      // all of its own ≥8 rows) and is still split by the segmentation
+      // below; a light-gray box (no dark rows) is left alone.
+      {
+        const bw = o.x1 - o.x0, colDark = new Int32Array(bw);
+        let body = 0;
+        for (let y = Math.max(0, o.y0); y < Math.min(h, o.y1); y++) {
+          const off = y * w;
+          let any = false;
+          for (let x = o.x0; x < o.x1; x++)
+            if (gray[off + x] < 160) { colDark[x - o.x0]++; any = true; }
+          if (any) body++;
+        }
+        const need = Math.min(8, body);
+        const bar = x => x >= o.x0 && x < o.x1 && colDark[x - o.x0] >= need;
+        for (const e of ext) {
+          while (e[1] < e[2] && !bar(e[1])) e[1]++;
+          while (e[2] > e[1] && !bar(e[2] - 1)) e[2]--;
+        }
+        ext = ext.filter(e => e[2] > e[1]);
+        if (!ext.length) continue;
+      }
       const mode = (seg, k) => {                         // most frequent edge value
         const n = new Map();
         for (const e of seg.exts) n.set(e[k], (n.get(e[k]) ?? 0) + 1);

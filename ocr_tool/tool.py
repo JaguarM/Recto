@@ -25,7 +25,7 @@ class OcrTool(PDFTool):
         # engine files (synced — versions rewritten by sync-recto.mjs)
         {'path': 'ocr_tool/engine/core.js', 'version': 'v=ab4d2193'},
         {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=b95cb058'},
-        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=4481e85f'},
+        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=6c97d074'},
         {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=e17c99c1'},
         {'path': 'ocr_tool/engine/render.js', 'version': 'v=ac6d0d86'},
         # the adapters (Recto-owned)
