@@ -401,7 +401,24 @@
     // the blanket ±2 in Y: underlines live UNDER text and their over/under
     // rows are a legitimate glyph∩rule composite zone (link rows regressed
     // when rules went adaptive).
-    const mask = new Uint8Array(w * h);
+    const mask = new Uint8Array(w * h);    // 1 = rule/vrule/dust cell, 2 = box cell
+    // EDGE MODEL (2026-09-03). A redaction box is a filled BLACK rectangle
+    // drawn over the text; boxes overlap and connect into other shapes, but
+    // the body is always black and only the boundary lines carry the box's
+    // partial alpha. The black body destroys whatever was under it — no
+    // evidence either way — but a glyph under an EDGE line shows through as a
+    // composite of the glyph and the edge's constant byte, and a glyph flush
+    // against the box leaves 0–2 columns of its own ink outside. `edge` holds
+    // that constant for every edge cell (0 = body or not an edge), taken per
+    // boundary line as the line's mode: the same near-constant-line test the
+    // padding vote uses, walked inward from the padded boundary until the
+    // black body. scanLine seeds its canvas with those bytes, so a glyph
+    // clipped by a box is judged on its visible columns AND on the composite
+    // it must leave in the edge line (EFTA-style `including S████`: the S's
+    // first column outside the bar and its second under the bar's 196 edge —
+    // 18 byte-exact pixels, 44 destroyed — and among 4,516 pool candidates
+    // anchored there exactly one glyph fits).
+    const edge = new Uint8Array(w * h);
     const rowIvs = new Array(h);           // per-row masked x-intervals [x0,x1) — lets the
                                            // dust pass split raw runs without reading mask bytes
     const mRows = new Uint8Array(h);       // per-row "mask has cells here" flag —
@@ -437,7 +454,41 @@
         mRows[y] = 1;
         (rowIvs[y] ??= []).push([x0, x1]);
         for (let x = x0; x < x1; x++)
-          mask[y * w + x] = 1;
+          mask[y * w + x] = o.type === 'box' ? 2 : 1;
+      }
+      if (o.type === 'box') {
+        // edge lines (EDGE MODEL above): from each side's padded boundary walk
+        // inward; every near-constant NON-black line is an edge and its cells
+        // take the line's mode; stop at the black body or at a line that does
+        // not vote (a stacked neighbour's shared row stays body — no evidence).
+        // Corner cells sit under two edges at once and their byte is neither
+        // line's: they stay body.
+        const lineMode = vals => {
+          const ink = vals.filter(v => v < 255);
+          if (!ink.length || ink.length < 0.9 * vals.length) return -1;
+          const s = [...ink].sort((a, b) => a - b), m = s[s.length >> 1];
+          return ink.filter(v => Math.abs(v - m) <= 3).length >= 0.6 * vals.length ? m : -1;
+        };
+        const colV = x => { const v = []; for (let y = y0; y < y1; y++) v.push(gray[y * w + x]); return v; };
+        const rowV = y => { const v = []; for (let x = x0; x < x1; x++) v.push(gray[y * w + x]); return v; };
+        const rowsDone = new Set();
+        const walkRows = (from, step) => {
+          for (let y = from, k = 0; y >= y0 && y < y1 && k < 3; y += step, k++) {
+            const m = lineMode(rowV(y));
+            if (m < 160) break;                        // dark: the body's own AA, no evidence
+            for (let x = x0; x < x1; x++) edge[y * w + x] = m;
+            rowsDone.add(y);
+          }
+        };
+        const walkCols = (from, step) => {
+          for (let x = from, k = 0; x >= x0 && x < x1 && k < 3; x += step, k++) {
+            const m = lineMode(colV(x));
+            if (m < 160) break;
+            for (let y = y0; y < y1; y++) edge[y * w + x] = rowsDone.has(y) ? 0 : m;
+          }
+        };
+        walkRows(y0, 1); walkRows(y1 - 1, -1);
+        walkCols(x0, 1); walkCols(x1 - 1, -1);
       }
     }
     // ---- dust & ghost masking (see comment above the mask builder) ----
@@ -603,6 +654,7 @@
       }
     }
     mask._rows = mRows;
+    mask._edge = edge;
     return { mask, objects };
   }
 
@@ -778,7 +830,14 @@
     // so a word whose head fell into unexplainable residue could never read
     // from its intact tail). One combined array keeps the candidate hot loop
     // at a single load.
-    const skip = new Uint8Array(bw * bh);
+    const skip = new Uint8Array(bw * bh);   // 1 explained by another line / tol dust,
+                                            // 2 fail-absorbed, 3 box BODY (destroyed ink)
+    // bar EDGE cells (detectObjects' EDGE MODEL): not skipped — the canvas
+    // holds the edge's own byte as prior ink, so a glyph under it is judged on
+    // the composite it must leave there
+    const isEdge = new Uint8Array(bw * bh);
+    const edgeMap = mask._edge ?? null;
+    const colInk = new Int16Array(256), colOpen = new Int16Array(256);   // tryCand scratch, per glyph column
     const pageAt = (x, y) => page.gray[y * W + x];
     const masked = (x, y) => skip[(y - y0) * bw + (x - xFrom)];
     const canAt = (x, y) => canvas[(y - y0) * bw + (x - xFrom)];
@@ -823,7 +882,7 @@
         const hasE = explained !== null && explained !== undefined && (eRows ? eRows[y] !== 0 : true);
         if (hasM || hasE) {
           for (let x = xFrom; x < xTo; x++) {
-            if ((hasM && mask[po + x]) || (hasE && explained[po + x])) {
+            if (hasE && explained[po + x]) {
               // skip cells are don't-care and never count as unexplained. A
               // foreign QUANT (a reconstructed palette whose LUT disagrees
               // with an OBSERVED page byte — lut[pv] !== pv) used to count
@@ -834,6 +893,15 @@
               // this branch never counted anything — dropping it is a no-op.
               canvas[co + x] = g[po + x];
               skip[co + x] = 1;
+            } else if (hasM && mask[po + x]) {
+              const ev = edgeMap ? edgeMap[po + x] : 0;
+              if (ev) {                                // bar edge: prior ink, judged
+                canvas[co + x] = ev; isEdge[co + x] = 1;
+                if (lin && ev >= 129 && ev !== 255) shifts[co + x] = 1;
+              } else {                                 // body, rule, dust: don't-care
+                canvas[co + x] = g[po + x];
+                skip[co + x] = mask[po + x] === 2 ? 3 : 1;
+              }
             } else if (judged && g[po + x] !== q255) unexpl[x - xFrom]++;
           }
         } else if (judged) {
@@ -848,7 +916,7 @@
       const before = pv !== q(canvas[i]);
       canvas[i] = v;
       const after = pv !== q(v);
-      if (y >= cTop && y < cBot && before !== after) unexpl[x - xFrom] += after ? 1 : -1;
+      if (y >= cTop && y < cBot && before !== after && !isEdge[i]) unexpl[x - xFrom] += after ? 1 : -1;
     };
     const nextUnexplained = (fromX) => {
       for (let x = Math.max(fromX, xFrom); x < xTo; x++)
@@ -900,14 +968,18 @@
       if (gx < xFrom || gx + g.w > xTo || gy < y0 || gy + g.h > y1) return null;
       // must explain the anchor column itself (hoisted: cheap reject)
       if (col < gx || col >= gx + g.w) return null;
-      let exact = 0, pending = 0, skipped = 0;
+      let exact = 0, pending = 0, skipped = 0, foreign = false;
       const linG = g.lin ?? lin;
       const { inkC, inkR, inkB, inkA } = g, nInk = inkC.length;
       const rowBase = gy * W + gx, canBase = (gy - y0) * bw + (gx - xFrom);
+      for (let c = 0; c < g.w; c++) { colInk[c] = 0; colOpen[c] = 0; }
       for (let k = 0; k < nInk; k++) {
         const cc = inkC[k], rr = inkR[k];
         const pOff = rowBase + rr * W + cc;
-        if (skip[canBase + rr * bw + cc]) { skipped++; continue; }  // object/absorbed pixel: no evidence either way
+        const ci = canBase + rr * bw + cc, sk = skip[ci];
+        colInk[cc]++;
+        if (sk) { skipped++; if (sk !== 3) foreign = true; continue; }  // object/absorbed pixel: no evidence either way
+        if (!isEdge[ci]) colOpen[cc]++;
         const gb = inkB[k], pv = page.gray[pOff], cv = canvas[canBase + rr * bw + cc];
         // fresh-canvas fast path (the overwhelmingly common case, non-linear
         // law): blending the glyph's alpha over white reproduces gb by
@@ -916,6 +988,27 @@
           const d = QUANT ? QUANT[gb] : gb;
           if (pv >= d - TOL && pv <= d + TOL) exact++;
           else if (pv < d - TOL) pending++;              // darker: future glyph may composite
+          else return null;
+          continue;
+        }
+        // bar EDGE cell, still the bar's own byte: the redactor drew the box
+        // LAST, over the text, so the page is the glyph's byte scaled by the
+        // edge's alpha — page = (gb·k)>>8 with (255·k)>>8 = edge (k is the
+        // edge byte's own coverage complement; one or two values fit). The
+        // glyph-over-bar order is 1 off on ~half the bytes (measured on the
+        // '>' against EFTA00434905's right bar) and is not the producer's.
+        // The linear law is a product with per-contributor shifts and reads
+        // the same either way (verified byte for byte on the clipped S).
+        if (isEdge[ci] && !linG && cv === edgeMap[pOff]) {
+          const kLo = Math.ceil(cv * 256 / 255), kHi = Math.floor(((cv + 1) * 256 - 1) / 255);
+          let ok = false, lo = 256;
+          for (let kk = kLo; kk <= kHi; kk++) {
+            const p = (gb * kk) >> 8;
+            if (p < lo) lo = p;
+            if (Math.abs(q(p) - pv) <= (TOL ? 2 * TOL : 0)) ok = true;
+          }
+          if (ok) exact++;
+          else if (pv < q(lo)) pending++;
           else return null;
           continue;
         }
@@ -954,10 +1047,37 @@
       // solid ink shows up as mostly-pending and must not be accepted; a glyph
       // mostly inside an object mask has no evidence and is rejected too
       const considered = nInk - skipped;
-      if (considered < nInk * 0.5 ||
-          exact < considered * 0.5 || pending > considered * 0.35) return null;
+      let clipped = false;
+      if (considered < nInk * 0.5) {
+        // CLIPPED by a box: most of the glyph is under a black body. It is a
+        // candidate only if every hidden pixel is body (never fail-absorbed
+        // residue or another line's ink), every visible pixel is byte-exact
+        // and none is pending — and the anchor loop accepts it only when it
+        // is the ONLY character in the pool that fits (see there).
+        if (foreign || !considered || pending || exact !== considered) return null;
+        // …and it must LEAK: at least one complete ink column on the open
+        // page, outside body and edge alike. Composite-only evidence (a
+        // glyph the body destroyed but for its edge shadow) is refused —
+        // that is where a sweep would start inventing letters.
+        let leaks = false;
+        for (let c = 0; c < g.w && !leaks; c++) if (colInk[c] && colOpen[c] === colInk[c]) leaks = true;
+        if (!leaks) return null;
+        clipped = true;
+      } else if (exact < considered * 0.5 || pending > considered * 0.35) return null;
       if (accepted.has(`${g.ch}@${pi + g.phx}`)) return null;  // after the pixel work: rare
-      return { g, pi, gx, gy, exact, pending, score: exact - pending * 0.25 };
+      return { g, pi, gx, gy, exact, pending, score: exact - pending * 0.25, clipped, hidden: skipped };
+    };
+    // does the ink at this anchor touch a box (body or edge) on its left?
+    const touchesBox = (col) => {
+      for (let dx = 1; dx <= 2; dx++) {
+        const x = col - dx;
+        if (x < xFrom) break;
+        for (let y = cTop; y < cBot; y++) {
+          const i = (y - y0) * bw + (x - xFrom);
+          if (skip[i] === 3 || isEdge[i]) return true;
+        }
+      }
+      return false;
     };
 
     const glyphs = [], fails = [], frags = [], records = [];
@@ -981,6 +1101,7 @@
       const col = nextUnexplained(cursor);
       if (col < 0) break;
       let best = null;
+      const clipped = [];                    // box-clipped passes (see tryCand)
       // advance chaining: within a word the next pen is the previous pen +
       // advance snapped to the ¼-px lattice (proven physics: pens snap to ¼ px
       // and sit δ ∈ [0, 1/32 px] below ideal), so probe that pen, then ±1–2
@@ -1023,6 +1144,7 @@
               if ((c.d00 & ~aq0) | (c.d01 & ~aq1) | (c.d10 & ~bq0) | (c.d11 & ~bq1)) continue;
               const r = tryCand(c.g, pi, col);
               if (!r) continue;
+              if (r.clipped) { clipped.push(r); continue; }
               if (!slot[s] || r.score > slot[s].score ||
                   (r.score === slot[s].score && c.g._i < slot[s].g._i)) slot[s] = r;
             }
@@ -1048,6 +1170,7 @@
           if ((g._d00 & ~aq0) | (g._d01 & ~aq1) | (g._d10 & ~bq0) | (g._d11 & ~bq1)) continue;
           const r = tryCand(g, col - back - g.dx - g.inkLeft, col);  // pen puts first ink col at col-back
           if (!r) continue;
+          if (r.clipped) { clipped.push(r); continue; }
           // tie-break on original candidate order: acceptance must not depend
           // on the group iteration order (plain loop = first max wins)
           if (!best || r.score > best.score || (r.score === best.score && r.g._i < best.g._i))
@@ -1056,6 +1179,32 @@
         }
         }
         if (best) break;
+      }
+      // ---- glyphs clipped by a redaction box (detectObjects' EDGE MODEL) ----
+      // A glyph whose LEADING columns are under a box body has no first ink
+      // column to anchor on; when the ink at this anchor touches a box on its
+      // left, sweep every candidate with its first ink column back under the
+      // box (exhaustive — only box-adjacent anchors ever pay, and a wrong
+      // candidate dies on its first visible pixel).
+      if (!best && touchesBox(col)) {
+        for (const g of cands)
+          for (let f = col - g.w + 1; f < col - 2; f++) {
+            const r = tryCand(g, f - g.dx - g.inkLeft, col);
+            if (!r) continue;
+            if (r.clipped) clipped.push(r);
+            else if (!best || r.score > best.score || (r.score === best.score && r.g._i < best.g._i)) best = r;
+          }
+      }
+      // A clipped candidate is accepted only when it is the only CHARACTER
+      // in the pool that explains every visible pixel — uniqueness is the
+      // whole guard: little ink fits many glyphs and is refused as ambiguous,
+      // never guessed; a full leaked column plus its composite in the edge
+      // fits one.
+      if (!best && clipped.length) {
+        const chs = new Set(clipped.map(r => r.g.ch));
+        if (chs.size === 1)
+          for (const r of clipped)
+            if (!best || r.score > best.score || (r.score === best.score && r.g._i < best.g._i)) best = r;
       }
       if (!best) {
         // rasterizer-variance dust: an older rasterizer may spread a curve a
@@ -1120,7 +1269,7 @@
         flGen++;
         const comp = [], stack = [];
         for (let y = cTop; y < cBot; y++)
-          if (pageAt(col, y) !== q(canAt(col, y)) && !masked(col, y)) stack.push(col << 16 | y);
+          if (pageAt(col, y) !== q(canAt(col, y)) && !masked(col, y) && !isEdge[(y - y0) * bw + (col - xFrom)]) stack.push(col << 16 | y);
         while (stack.length) {
           const k = stack.pop();
           const px = k >> 16, py = k & 0xffff;
@@ -1133,7 +1282,8 @@
             const nx = px + dx, ny = py + dy;
             if (nx < xFrom || nx >= xTo || ny < cTop || ny >= cBot ||
                 flVis[(ny - y0) * bw + (nx - xFrom)] === flGen) continue;
-            if (pageAt(nx, ny) < 255 && !masked(nx, ny) && pageAt(nx, ny) !== q(canAt(nx, ny)))
+            if (pageAt(nx, ny) < 255 && !masked(nx, ny) && !isEdge[(ny - y0) * bw + (nx - xFrom)] &&
+                pageAt(nx, ny) !== q(canAt(nx, ny)))
               stack.push(nx << 16 | ny);
           }
         }
@@ -1177,6 +1327,7 @@
           continue;
         }
         const gb = g.bytes[p], ga = g.alpha[p], pv = pageAt(x, y), cv = canAt(x, y);
+        if (isEdge[(y - y0) * bw + (x - xFrom)] && !(g.lin ?? lin)) { setCan(x, y, pv); continue; }  // judged bar-last in tryCand
         if (TOL && cv !== 255 && gb >= 255 - 2 * TOL) continue;  // faint skip (see above)
         const t = cv !== 255 ? 2 * TOL : TOL;
         let val;
@@ -1196,9 +1347,10 @@
         setCan(x, y, val);
       }
       if (DBG_LINE !== null && DBG_LINE === baseline && maxGlyphs === Infinity)
-        console.log(`    accept '${g.ch}' pen ${pi + g.phx} exact ${best.exact} pend ${best.pending} (anchor ${col})`);
+        console.log(`    accept '${g.ch}' pen ${pi + g.phx} exact ${best.exact} pend ${best.pending} (anchor ${col})` +
+          (best.clipped ? ` CLIPPED ${best.hidden} px under a box` : ''));
       glyphs.push({ ch: g.ch, pen: pi + g.phx, adv: g.adv, exact: best.exact, pending: best.pending,
-        ...(g.src ? { src: g.src } : {}) });
+        ...(g.src ? { src: g.src } : {}), ...(best.clipped ? { clip: best.hidden } : {}) });
       accepted.add(`${g.ch}@${pi + g.phx}`);
       chainPenQ = Math.round((pi + g.phx + g.adv) * 4);  // expected next pen on the ¼-px lattice
       cursor = col + 1;   // pending overlap columns right of col are revisited; the
