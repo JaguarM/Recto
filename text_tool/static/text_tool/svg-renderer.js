@@ -154,6 +154,12 @@ function renderBox(box) {
  */
 function _autoFitWidth(g, box) {
   if (!box.autoWidth) return;
+  // A pixel renderer (see _applyPixelRender) knows the laid-out advance width
+  // exactly; the hidden <text> would measure the wrong face.
+  if (box._pixel && box._pixel.advanceW > 0) {
+    box.w = Math.max(box._pixel.advanceW, 6);
+    return;
+  }
   const text = g.querySelector('.utb-text');
   if (!text) return;
   let measured;
@@ -244,6 +250,42 @@ function _updateText(g, box) {
   }
 
   text.textContent = box.text;
+
+  _applyPixelRender(g, box, xs, baseline);
+}
+
+/**
+ * Optional pixel-renderer seam. A plugin may define
+ * `window.utbPixelRender(box, xs, baseline)` and return
+ * `{href, x, y, w, h, advanceW}` — a raster of this box in image-pixel
+ * space — or `null` to decline. When it returns a raster, the group gets the
+ * `utb-pixel-mode` class (CSS hides the <text> without touching its inline
+ * style, which inline-edit owns) and an <image> shows the pixels at their
+ * exact viewBox coordinates. With no plugin defining the seam, or on `null`,
+ * the SVG text renders exactly as before. The result rides on `box._pixel`
+ * (transient) so _autoFitWidth can size auto-width boxes from it.
+ */
+function _applyPixelRender(g, box, xs, baseline) {
+  let pix = null;
+  if (typeof window.utbPixelRender === 'function') {
+    try { pix = window.utbPixelRender(box, xs, baseline); }
+    catch (e) { console.warn('utbPixelRender failed for', box.id, e); pix = null; }
+  }
+  box._pixel = pix || null;
+  let img = g.querySelector('.utb-pixel');
+  g.classList.toggle('utb-pixel-mode', !!pix);
+  if (!pix) { if (img) img.remove(); return; }
+  if (!img) {
+    img = document.createElementNS(SVG_NS, 'image');
+    img.classList.add('utb-pixel');
+    img.setAttribute('preserveAspectRatio', 'none');
+    g.appendChild(img);
+  }
+  img.setAttribute('x', pix.x);
+  img.setAttribute('y', pix.y);
+  img.setAttribute('width', pix.w);
+  img.setAttribute('height', pix.h);
+  if (img.getAttribute('href') !== pix.href) img.setAttribute('href', pix.href);
 }
 
 /** Thin edge handle rects (left / right) for resize interaction. */

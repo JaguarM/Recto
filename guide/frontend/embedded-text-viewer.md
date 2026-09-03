@@ -104,9 +104,10 @@ The core function. Creates or updates the `<g>` group and its children for a sin
 
 1. Finds or creates `<svg class="text-layer">` for the page.
 2. Finds or creates `<g data-id="...">`.
-3. Updates the bbox rect (`x`, `y`, `width`, `height`, `stroke`).
-4. Updates the `<text>` element (see below).
-5. Recreates the two edge handle rects.
+3. Updates the `<text>` element (see below), then asks the optional pixel-renderer seam (`window.utbPixelRender?.(box, xs, baseline)`, see [Unified Text Box](../architecture/unified-text-box.md#rendering-pipeline)); a returned raster is shown as `<image class="utb-pixel">` and the group gets `.utb-pixel-mode`.
+4. Auto-fits `box.w` for `autoWidth` boxes (from the seam's `advanceW` when a raster was returned, else the measured text length).
+5. Updates the bbox rect (`x`, `y`, `width`, `height`, `stroke`).
+6. Recreates the two edge handle rects.
 
 ### `<text>` attribute layout
 

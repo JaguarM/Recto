@@ -27,7 +27,7 @@ const OCR_GLYPHS_BASE = '/static/ocr_tool/glyphs/';
 const OCR_UNCLEAN_COLOR = 'rgba(230, 124, 0, 0.85)';   // non-byte-clean lines
 const OCR_UNREAD_COLOR = 'rgba(217, 48, 37, 0.85)';    // □ marker boxes
 const OCR_CACHE_BASE = '/ocr/cache/';                  // + document sha256 (state.docHash)
-const OCR_CACHE_VERSION = 1;   // bump when the slim payload shape changes
+const OCR_CACHE_VERSION = 2;   // bump when the slim payload shape changes (2: spaceAdv + entry src)
 
 function setOcrStatus(msg) {
   const el = document.getElementById('ocr-status');
@@ -98,11 +98,13 @@ function ocrCharPositions(L, x0) {
     const two = L.text.slice(ti, ti + 2);
     const isLig = (e.ch === 'ﬁ' && two === 'fi') || (e.ch === 'ﬂ' && two === 'fl');
     if (isLig) {
-      chars.push({ c: two[0], x: e.pen - x0, w: e.adv / 2 });
-      chars.push({ c: two[1], x: e.pen + e.adv / 2 - x0, w: e.adv / 2 });
+      // the page holds ONE ligature glyph: mark the pair so a pixel renderer
+      // draws e.ch at the first pen and skips the tail (SVG text is unaffected)
+      chars.push({ c: two[0], x: e.pen - x0, w: e.adv / 2, lig: e.ch, src: e.src });
+      chars.push({ c: two[1], x: e.pen + e.adv / 2 - x0, w: e.adv / 2, ligTail: true });
       ti += 2;
     } else {
-      chars.push({ c: L.text[ti], x: e.pen - x0, w: e.adv });
+      chars.push({ c: L.text[ti], x: e.pen - x0, w: e.adv, src: e.src });
       ti += 1;
     }
     prevEnd = e.pen + e.adv;
@@ -142,6 +144,17 @@ function ocrAddBoxes(pageNum, img, res, pass) {
     const set = L.set;
     const { family, bold, italic } = ocrFontFromSetName(L.font);
 
+    // Which set drew each glyph: a union pool ('a+b') accepts glyphs from
+    // several sets, and the engine records that on L.glyphs[].src. Carry it
+    // onto the entries (keyed by pen — entries are the glyphs in pen order)
+    // so the pixel view can re-render a mixed-font line with the right
+    // bitmaps. A cached result already has entry.src from the slim payload.
+    if (L.glyphs?.length) {
+      const srcAt = new Map();
+      for (const g of L.glyphs) if (g.src) srcAt.set(g.pen, g.src);
+      for (const e of L.entries) if (e.src === undefined && srcAt.has(e.pen)) e.src = srcAt.get(e.pen);
+    }
+
     // invert svg-renderer's computeBaseline (y + h·0.85 − 1.3) so the SVG
     // text sits on the MEASURED baseline exactly
     const h = (set.maxAsc + set.maxDesc) * sy;
@@ -166,7 +179,9 @@ function ocrAddBoxes(pageNum, img, res, pass) {
       const segLine = { text: L.text.slice(startOff, endOff),
         entries: seg.map(e => ({ ...e, i: e.i - startOff })) };
       const x0 = first.pen;
-      const chars = ocrCharPositions(segLine, x0).map(cp => ({ c: cp.c, x: cp.x * sx, w: cp.w * sx }));
+      // keep every field ocrCharPositions marks (lig/ligTail, src) — the pixel
+      // view needs them; only the geometry is scaled into viewBox space
+      const chars = ocrCharPositions(segLine, x0).map(cp => ({ ...cp, x: cp.x * sx, w: cp.w * sx }));
 
       const box = utbState.addBox(new UnifiedTextBox({
         type: 'ocr', page: pageNum, text: segLine.text,
@@ -179,7 +194,13 @@ function ocrAddBoxes(pageNum, img, res, pass) {
       }));
       box.ocrSource = true;
       box.ocr = { clean: !!L.clean, tol: pass.tol || 0, quant: !!pass.quant,
-        union: !!pass.union, font: L.font, baseline: L.baseline, fails: L.fails.length };
+        union: !!pass.union, font: L.font, baseline: L.baseline, fails: L.fails.length,
+        // the y-phase records the reader pinned the line to (0, or 0.5 on a
+        // legacy set) — the pixel view re-draws with the same records
+        phy: L.phy ?? 0,
+        // the page-calibrated space advance (engine spaceCalib) — what a
+        // re-layout of edited text uses for its spaces
+        spaceAdv: res.spaceAdv ?? null };
     }
     tally.lines++;
     if (L.clean) tally.clean++;
@@ -206,7 +227,7 @@ function ocrAddBoxes(pageNum, img, res, pass) {
 // /ocr/cache/<sha256> (the backend stores them in ocr_tool/cache/, committed
 // to the repo; production is read-only). On later loads a cache hit replays
 // the boxes through ocrAddBoxes without the engine — or the ~10 MB glyph
-// download. Uploaded documents never touch the cache: char_training's
+// download. Uploaded documents never touch the cache: tol0's
 // recto smoke test uploads its certified document and must always exercise
 // the real engine.
 
@@ -217,12 +238,14 @@ function ocrSlimResult(res) {
   return {
     lines: (res.lines || []).map(L => ({
       text: L.text, font: L.font, baseline: L.baseline, top: L.top, bot: L.bot,
-      clean: !!L.clean,
+      phy: L.phy ?? 0, clean: !!L.clean,
       fails: Array.from(L.fails || []),
       boxes: (L.boxes || []).map(b => Array.from(b)),
       set: L.set ? { maxAsc: L.set.maxAsc, maxDesc: L.set.maxDesc, sizePx: L.set.sizePx } : null,
-      entries: (L.entries || []).map(e => ({ i: e.i, pen: e.pen, adv: e.adv, ch: e.ch })),
+      entries: (L.entries || []).map(e => ({ i: e.i, pen: e.pen, adv: e.adv, ch: e.ch,
+        ...(e.src ? { src: e.src } : {}) })),          // src: which set of a union pool drew it
     })),
+    spaceAdv: res.spaceAdv ?? null,                    // page-calibrated space (pixel view re-layout)
     objects: (res.objects || []).filter(o => o.type === 'box')
       .map(o => ({ type: o.type, x0: o.x0, y0: o.y0, x1: o.x1, y1: o.y1 })),
   };

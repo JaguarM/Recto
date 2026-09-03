@@ -183,7 +183,8 @@
     // Don't trigger if clicking inside an active edit input
     if (e.target.closest('.utb-inline-edit')) return;
 
-    const textEl = e.target.closest('.utb-text') || e.target.closest('.utb-bbox');
+    const textEl = e.target.closest('.utb-text') || e.target.closest('.utb-bbox') ||
+      e.target.closest('.utb-pixel');   // pixel-rendered box (svg-renderer seam)
     if (!textEl) {
       // Double-click outside → commit any active edit
       commitInlineEdit();

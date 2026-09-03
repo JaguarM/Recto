@@ -55,9 +55,16 @@ renderBox(box)            ← called by renderTextLayer() / renderAllTextLayers(
     │
     ▼
 SVG <text> element in .text-layer[data-page="N"]
+    │
+    └─ window.utbPixelRender?.(box, xs, baseline)   optional pixel-renderer seam
+           returns {href, x, y, w, h, advanceW} → an <image class="utb-pixel">
+           shows those pixels and the group gets `.utb-pixel-mode` (the <text>
+           stays in the DOM, unpainted); null (or no plugin) → SVG text as usual
 ```
 
 The SVG layer uses a fixed `viewBox` matching document pixel space (816 × 1056). Zoom is handled entirely by CSS sizing on the layer element — coordinate values in `box.x/y/w/h` never change.
+
+**Pixel-renderer seam.** A plugin may define `window.utbPixelRender(box, xs, baseline)` to draw a box as a raster in image-pixel space instead of vector text (`xs` = the absolute per-character x positions the SVG would use, or `[box.x]`; `baseline` = `computeBaseline(box)`). `svg-renderer.js` calls it `typeof`-guarded for every box; the result rides on the transient `box._pixel` so `_autoFitWidth` can size auto-width boxes from its `advanceW`. Double-click on the image opens inline edit like on the text. With no plugin defining the seam the pipeline is unchanged.
 
 ---
 

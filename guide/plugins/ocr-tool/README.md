@@ -51,7 +51,9 @@ of re-run in every browser:
 - The cache files are **committed**: swap the startup PDF, open the app
   locally once, let the auto OCR finish, commit the new JSON. Re-running
   **All pages** on the startup document refreshes it (e.g. after an engine
-  re-sync). `version` (`OCR_CACHE_VERSION`) guards the payload shape.
+  re-sync), and tol0's `node tools/recto-cache.mjs` does the same headless.
+  `version` (`OCR_CACHE_VERSION`, currently 2: per-page `spaceAdv`, per-line
+  `phy`, per-entry `src`) guards the payload shape.
 - **Uploaded documents never touch the cache** — deliberately, so
   char_training's `npm run recto-test` (which uploads its certified document
   and waits for the auto cycle) always exercises the real engine, and a
@@ -59,13 +61,15 @@ of re-run in every browser:
 
 ## The engine is developed elsewhere
 
-`static/ocr_tool/engine/` (`core.js`, `ocr.js`, `blindocr.js`) and
-`static/ocr_tool/glyphs/` are **verbatim copies** from the external
-`char_training` repo (`Desktop/char_training`), where the reader is developed
-and certified against a multi-document corpus gate. **Never edit those copies
+`static/ocr_tool/engine/` (`core.js`, `ocr.js`, `ocr-engine.js`, `blindocr.js`,
+`render.js`) and `static/ocr_tool/glyphs/` are **verbatim copies** from the
+external `tol0` repo (`Desktop/tol0`, the certified port of the older
+`char_training`), where the reader is developed and certified against a
+multi-document corpus gate. **Never edit those copies
 here.** The workflow:
 
-1. Edit the engine in `char_training`, run its regression gate.
+1. Edit the engine in `tol0`, run its tests and certifications (`npm test`,
+   `npm run certify:ftclone`, `npm run certify:render`) and its gate.
 2. `npm run sync:recto` there — copies the engine + glyph sets in and rewrites
    the cache-buster hashes in this plugin's `tool.py`.
 3. `npm run recto-test` there — headless end-to-end smoke: boots this Django
@@ -73,7 +77,8 @@ here.** The workflow:
    boxes. (`npm run sync:recto -- --check` reports staleness without writing.)
 
 Only `ocr-tool.js` (the adapter: UI wiring, page-raster → engine buffer,
-lines → UnifiedTextBoxes) is owned by this app and edited here.
+lines → UnifiedTextBoxes) and `pixel-view.js` (the MuPDF pixel view) are
+owned by this app and edited here.
 
 ## How it reads
 
@@ -123,3 +128,51 @@ On an unmodelled producer the reader reports `□`s or escalates to tolerant
 mode and says so in the status line — it never silently guesses. New
 families are added in char_training (new glyph exports / producer laws),
 then synced.
+
+## MuPDF pixel view
+
+Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
+
+| Tooltip | id | What it does |
+|---|---|---|
+| Show text as MuPDF pixels | `ocr-pixel-view` | Every text box is drawn from the reader's own glyph bitmaps on mupdf's ¼-px pen lattice and whole-pixel baseline, instead of SVG text — the raster mupdf would have produced. Tinted like the SVG text (alpha = ink darkness); pixelated when zoomed. |
+| Highlight pixels that differ from the page | `ocr-pixel-diff` | Matching ink pixels go faint, pixels whose predicted byte differs from the page turn solid red. The status line reports `OCR lines n/m exact` (reader-certified lines, which must all be exact — within the reader's own ±tol when a line was read on a tolerant rung) and `other boxes n/m exact` (embedded / hand-added text, compared but not expected to match) for the page and, on selection, the box's ink-pixel and differing-pixel counts. |
+
+- **Which glyph set draws a box.** OCR lines: the set the reader picked
+  (`box.ocr.font`; a union name resolves per glyph through
+  `baseCharPositions[i].src`). Other boxes (embedded, hand-added): the
+  shipped set whose family, bold/italic and pixel size match
+  (`sizePt × px/pt`, within 0.02 px). No match → the box stays SVG and the
+  status line names the missing set.
+- **The reader's own terms.** An OCR line is re-drawn with the y-phase
+  records the reader pinned it to (`box.ocr.phy`, 0.5 on the legacy sets
+  that carry ½-phase rasters) and judged at the tolerance of the rung it was
+  read on (`box.ocr.tol`: byte-exact at 0; |Δ| ≤ tol, 2·tol on composite
+  pixels, otherwise — scanLine's rule). "Exact" in the status line means
+  exact to that standard.
+- **Pens.** Measured pens (plus nudges and space overrides) when the box has
+  per-character positions; otherwise a fresh layout from `box.x` through
+  `render.js layoutLine` with the set's advances. Spaces use the reader's
+  page-calibrated space (`box.ocr.spaceAdv`, also stored in the slim cache,
+  payload version 2) or an approximate per-family em fraction.
+- **Diff compares against the reader's page**: the viewer's `<img>` through
+  `PageEngine` + `whitenColored`, through the page's palette map when the
+  line was read with a palette pass, and never under the reader's object
+  mask or box halos (`render.js objectMask`: `detectObjects` plus the ±2-column,
+  ±3-row halo around every redaction box, where the reader forgives clipped
+  glyph fragments; a descender dipping into a box's padding or a glyph
+  half-swallowed by the redactor is reported as "under a box/rule", not as a
+  difference) — so zero differing pixels means the same thing as
+  the reader's byte-clean. Hidden layers (`hide-ocr-text` /
+  `hide-embedded-text`) are not drawn or counted.
+- **Honest limits.** A character the set lacks, a set that is not loaded, or a
+  page raster that is not 1:1 with the viewBox → SVG fallback, never an
+  approximation. The seam is `window.utbPixelRender` in `svg-renderer.js`
+  (see [Unified Text Box](../../architecture/unified-text-box.md)).
+- **Proofs.** tol0: `npm run certify:render` (render.js vs real mupdf at every
+  1/64 pen phase, both TTF and CFF pipelines, forced overlaps — 0 diffs),
+  `npm test` (synthetic round trip render → readPage → clean). Recto:
+  `python manage.py test ocr_tool`. Browser: tol0's `npm run recto-test`
+  asserts every byte-clean OCR box reports 0 differing pixels; its
+  `tools/verify-recto-pixels.mjs` runs the same check over a folder of PDFs.
+  Design record: [pixel-view-plan.md](pixel-view-plan.md).

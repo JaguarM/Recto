@@ -25,10 +25,10 @@ page — the panel, its CSS, and its wiring all live in the plugin.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `ocr_tool` | [ocr-tool/](ocr-tool/) | Byte-exact blind-reader OCR of the page rasters (client-side); certified lines land as editable `ocr` text boxes, detected redaction rectangles as `redaction` boxes | *(none — fully client-side)* |
+| `ocr_tool` | [ocr-tool/](ocr-tool/) | Byte-exact blind-reader OCR of the page rasters (client-side); certified lines land as editable `ocr` text boxes, detected redaction rectangles as `redaction` boxes. **MuPDF pixel view**: draws any text box from the reader's glyph bitmaps on mupdf's ¼-px lattice and diffs it against the page (via text_tool's `utbPixelRender` seam) | `/ocr/cache/<hash>` (precomputed startup-document read) |
 
 - **Requires `text_tool`** (renders through the unified text box system); works with or without `embedded_text_viewer`.
-- Its `engine/` + `glyphs/` static files are synced verbatim from the external `char_training` repo (`npm run sync:recto` there) — edit the engine there, never in this repo. `npm run recto-test` there smoke-tests the embedded engine end to end.
+- Its `engine/` + `glyphs/` static files are synced verbatim from the external `tol0` repo (`npm run sync:recto` there) — edit the engine there, never in this repo. `npm run recto-test` there smoke-tests the embedded engine and the pixel view end to end.
 
 ## Base64 attachment decoder
 
