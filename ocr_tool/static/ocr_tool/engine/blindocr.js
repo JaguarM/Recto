@@ -284,8 +284,17 @@
     const passes = hint ? [hint, ...blindPasses.filter(p => key(p) !== key(hint))] : blindPasses;
     const doc = opts?.carry;
     if (doc) doc.passes ??= new Map();
+    // The pass that EXPLAINS THE MOST INK wins: score = glyphs read − unread
+    // clusters, ties to the earliest (weakest-machinery) rung. "Fewest
+    // failures" used to decide, and it preferred a page whose unreadable lines
+    // stayed unread bands (one failure each) over the same page half-read at
+    // a tolerant rung (a □ per gap) — EFTA00009865 p1: tol 0 read 82 glyphs
+    // with 57 failures, tol 2 (union) 278 with 164, and the ladder showed the
+    // 82. The ±10 rung is a last resort and only competes when no rung up to
+    // ±2 read anything at all. A pass with no failures still stops the ladder.
     let best = null;
     for (const pass of passes) {
+      if (pass.tol > 2 && best && best.glyphs > 0) continue;   // the last resort only when nothing read
       let carry = doc?.passes.get(key(pass));
       if (doc && !carry) doc.passes.set(key(pass), carry = {});
       const r = await readPage(page, sets, { tol: pass.tol,
@@ -293,11 +302,14 @@
         progress: opts?.progress && ((d, t) => opts.progress(pass, d, t)) });
       const fails = r.lines.reduce((s, L) => s + L.fails.length, 0) +
         r.lines.filter(L => !L.set && !L.fragOnly).length;
-      const rank = blindPasses.findIndex(p => key(p) === key(pass));
-      if (!best || fails < best.fails || (fails === best.fails && rank < best.rank))
-        best = { res: r, pass, fails, rank };
-      if (best.fails === 0) break;                     // fully read — stop here
       const glyphs = r.lines.reduce((s, L) => s + L.glyphs.length, 0);
+      const rank = blindPasses.findIndex(p => key(p) === key(pass));
+      const score = glyphs - fails;
+      const lastResort = pass.tol > 2;
+      if (!best || (lastResort ? best.glyphs === 0 && glyphs > 0
+                               : score > best.score || (score === best.score && rank < best.rank)))
+        best = { res: r, pass, fails, glyphs, score, rank };
+      if (best.fails === 0) break;                     // fully read — stop here
       // "good enough" gives up only after the strongest tol-2 machinery
       // (WITH union) ran — stopping at plain {tol:2} starved the calibri
       // family's union pass of its chance to clear the remaining □s

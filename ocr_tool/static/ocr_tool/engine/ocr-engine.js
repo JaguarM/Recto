@@ -821,6 +821,10 @@
   // undefined): BR_DEBUG=1 (fail pixels), BR_LINE=<baseline> (accept trace),
   // BR_PIX=<col> (per-pixel rejection detail). BR_PIX also disables the
   // fresh-canvas fast path so per-pixel debug output stays complete.
+  // BR_PROF=1 prints, per page, the probe count and time by sweep (primary /
+  // floor / below / packed) — the cost of a page is its UNREAD bands times the
+  // roster, and this is how to see it. BR_PICK=1 prints every band's pick
+  // with the sweep that produced it, and the below-sweep decision.
   const HAS_ENV = typeof process !== 'undefined' && !!process.env;
   const DBG_PIX = HAS_ENV && !!process.env.BR_PIX;
   const DBG_LINE = HAS_ENV && process.env.BR_LINE ? +process.env.BR_LINE : null;
@@ -1534,7 +1538,13 @@
   // try to read the first few glyphs of a band at a candidate (baseline, set, phy);
   // returns matched-ink score. maxFails bounds the work on wrong hypotheses —
   // without it a bad baseline absorbs the whole band column by column.
+  const PROF = HAS_ENV && !!process.env.BR_PROF ? { n: 0, ms: 0, by: {} } : null;
+  let profTag = 'primary';
   function probeBaseline(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot, opts = null) {
+    if (PROF) { const t = Date.now(); const r = probeBaseline0(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot, opts); PROF.n++; PROF.ms += Date.now() - t; PROF.by[profTag] = (PROF.by[profTag] || 0) + (Date.now() - t); return r; }
+    return probeBaseline0(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot, opts);
+  }
+  function probeBaseline0(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot, opts = null) {
     const line = scanLine(page, mask, set, phy, baseline, x0, Math.min(x1, x0 + 160), 4, 2, TOL, quant, null, bandTop, explained, bandBot, opts);
     return line.glyphs.reduce((s, g) => s + g.exact, 0) - line.fails.length * 20;
   }
@@ -1719,6 +1729,7 @@
             pick = { set: hint.set, phy: hint.phy, yb, below: hint.below,
               score: probe.glyphs.reduce((s, g) => s + g.exact, 0) };
         }
+      const tagPick = (t) => { if (pick && !pick.sweep) pick.sweep = t; };
       if (!pick && last) {
         for (let yb = bot; yb >= bot - last.set.maxDesc && yb > top && !pick; yb--) {
           const probe = scanLine(page, mask, last.set, last.phy, yb,
@@ -1728,6 +1739,8 @@
               score: probe.glyphs.reduce((s, g) => s + g.exact, 0) };
         }
       }
+      tagPick('hint/last');
+      if (PROF) profTag = 'primary';
       // pin (set, phy, baseline): try candidates, keep best probe score
       // baseline = last ink row + 1 on descender-free lines, up to maxDesc higher
       // otherwise — try the whole range (and every set × y-phase)
@@ -1744,6 +1757,8 @@
       // Brunel" between redactions). Second chance, deeper floor — only
       // bands the primary sweep failed pay for it, so existing picks are
       // untouched.
+      tagPick('primary');
+      if (PROF) profTag = 'floor';
       if (!pick)
         for (const set of sets)
           for (const phy of set.byPhy.keys())
@@ -1754,7 +1769,24 @@
       // glyphs whose ink sits entirely above the baseline (a row of '-' or '*':
       // separators, dividers) put the true baseline BELOW the band bottom —
       // outside the range above. Only failed bands pay for the second sweep.
-      if (!pick)
+      // Two kinds of band need it: one too short to hold a text line (< 9
+      // rows: a '-' row is 2, '=' 3, '*' 5, a '>' quote line 7; x-height plus
+      // an ascender is 9 at 12 px), and one whose baseline rows lie under an
+      // object's mask — underlined text, text on a rule — so the band ends
+      // above its true baseline (nimbusrom lost a 23-glyph line when this
+      // case was not kept). Every other unread band is text no set reads,
+      // and there the sweep was half of all probe time (EFTA00009865 p1:
+      // 3.4 of 6.4 s) for nothing.
+      tagPick('floor');
+      if (PROF) profTag = 'below';
+      // …and the UPPER segment of a split band (work[wi].clamp), whose bottom
+      // is the lower line's window top and may cut through the upper line's
+      // baseline: nimbusrom p1 "U.S. Department of Justice" at y131 sits in a
+      // segment ending at 129, beside the seal — lost without this.
+      // (rules only: a redaction BOX starting under a band belongs to the next line)
+      const objBelow = bot - top >= 9 && objects.some(ob => ob.type === 'rule' && ob.y0 >= bot - 1 && ob.y0 <= bot + 4 && ob.x1 > x0 && ob.x0 < x1);
+      if (HAS_ENV && process.env.BR_PICK && !pick) console.error(`  below-sweep band ${top}-${bot}: short=${bot - top < 9} objBelow=${objBelow} clamp=${!!work[wi].clamp}`);
+      if (!pick && (bot - top < 9 || objBelow || work[wi].clamp))
         for (const set of sets)
           for (const phy of set.byPhy.keys())
             for (let yb = bot + 1; yb <= bot + set.maxAsc && yb <= page.h; yb++) {
@@ -1807,6 +1839,8 @@
       // pass 1 — the bottom line, re-anchored. Keeps the engine's bottom-first
       // peel order: pin the last line, split it off, let the rows above
       // re-enter this loop as a band of their own.
+      tagPick('below');
+      if (PROF) profTag = 'packed';
       if (!pick) packedSweep(bot - Math.max(...sets.map(s => s.maxDesc)), bot, true);
       // pass 2 — ANY line in the band. The bottom line of a packed band can be
       // unpinnable for a second reason: at ~12px pitch the line ABOVE it
@@ -1819,6 +1853,8 @@
       // neighbours as bands of their own, and by the time they are scanned its
       // ink is explained and the overlap rows are settled evidence.
       if (!pick) packedSweep(top + 1, bot - Math.max(...sets.map(s => s.maxDesc)) - 1, false);
+      tagPick('packed');
+      if (pick && HAS_ENV && process.env.BR_PICK) console.error(`  pick y${pick.yb} ${pick.set.name} via ${pick.sweep} band ${top}-${bot}${work[wi].clamp ? ' (split upper)' : ''}`);
       if (pick) last = { set: pick.set, phy: pick.phy };
       const pushUnread = () => {
         // a band whose every ink pixel sits inside box halos is redaction
@@ -1963,6 +1999,7 @@
       lines.push(L);
     }
     if (carry) carry.last = last;
+    if (PROF) { console.error(`  probes ${PROF.n}, ${PROF.ms} ms: ${Object.entries(PROF.by).map(([k, v]) => k + ' ' + v + 'ms').join(', ')}`); PROF.n = 0; PROF.ms = 0; PROF.by = {}; }
     // retro-check recorded fails: a fail whose every dead pixel was explained
     // by ANOTHER line (a neighbour line's ascender tip or descender tail
     // row-glued into this band) is not unread text — retract it. Own absorbed
