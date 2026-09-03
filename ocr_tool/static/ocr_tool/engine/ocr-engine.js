@@ -49,9 +49,14 @@
   // byte is present by construction, palette grays are fixpoints). Scan
   // canvases stay in ORIGINAL space — the producer quantized once, at the end
   // — and every prediction-vs-page compare goes through this map.
-  function quantMap(page) {
+  // exclude: pixels left out of the "available" set — by default the pixels
+  // colourInk read as coverage (page.converted), whose bytes the producer
+  // never quantized as gray. Every consumer (the reader, Recto's pixel view)
+  // then builds the SAME map for a page.
+  function quantMap(page, exclude = page.converted || null) {
     const seen = new Uint8Array(256);
-    for (const v of page.gray) seen[v] = 1;
+    if (exclude) { for (let i = 0; i < page.gray.length; i++) if (!exclude[i]) seen[page.gray[i]] = 1; }
+    else for (const v of page.gray) seen[v] = 1;
     const avail = [];
     for (let v = 0; v < 256; v++) if (seen[v]) avail.push(v);
     const Q = new Uint8Array(256);
@@ -162,7 +167,7 @@
           const dark = x < w && v < 160;
           if (dark) { if (dS < 0) dS = x; dGap = 0; }
           else if (dS >= 0 && ++dGap > 1) {
-            if (x - dGap + 1 - dS >= 40) rows.push({ y, x0: dS, x1: x - dGap + 1 });
+            if (x - dGap + 1 - dS >= 40) rows.push({ y, x0: dS, x1: x - dGap + 1, dark: true });
             dS = -1; dGap = 0;
           }
           if (v >= 255 || v < 160) {
@@ -844,6 +849,16 @@
     // wrong (docs/LAWS.md §8), and dark edges slip by one byte in two
     // producers' box compositors (a 147 predicted for a 148, a 40 for a 41).
     const shadowOpt = !!(opts && opts.shadow);
+    // opts.rules: the page's rule objects. An underline is interrupted by
+    // every descender that crosses it (a 2-px stem plus its AA), and the
+    // pieces left outside the detected rule — 17 px, 1 px — are ink no
+    // glyph explains; a probe's fail budget then refuses the whole line
+    // (EFTA00382173's link lines, once coloured text reads as coverage). A
+    // dead component that lies entirely on a rule's rows (±1) and spans at
+    // most 2 rows is the rule's own: absorbed silently, in probes and final
+    // scans alike, never a □. (Extending the rule itself in detectObjects
+    // grew false "rules" along lines of serifs and cost `big` three glyphs.)
+    const rules = (opts && opts.rules) || null;
     const inHalo = (x, y) => halos && halos.some(h => x >= h[0] && x < h[1] && y >= h[2] && y < h[3]);
     const q = QUANT ? v => QUANT[v] : v => v;           // palette law (see quantMap)
     const lin = set.linear;
@@ -1162,7 +1177,7 @@
       return false;
     };
 
-    const glyphs = [], fails = [], frags = [], records = [];
+    const glyphs = [], fails = [], frags = [], records = [], colourFails = [];
     // fail-absorbed pixels that a LATER-accepted glyph's ink covers. The flood
     // absorbs a failing blob's pixels out to col+2 BEFORE the glyphs right of
     // col have been tried, so it can bury the leading AA column of a letter
@@ -1389,6 +1404,20 @@
               unexpl[px - xFrom]--;
           }
         }
+        // the rule's own pieces (see opts.rules above): absorb, no record
+        if (rules && comp.length) {
+          let ry0 = 1e9, ry1 = -1;
+          for (const k of comp) { const py = k & 0xffff; if (py < ry0) ry0 = py; if (py > ry1) ry1 = py; }
+          if (ry1 - ry0 <= 1 && rules.some(r => ry0 >= r.y0 - 1 && ry1 <= r.y1)) {
+            for (const k of comp) {
+              const px = k >> 16, py = k & 0xffff;
+              setCan(px, py, pageAt(px, py));
+              skip[(py - y0) * bw + (px - xFrom)] = 2;
+            }
+            cursor = col;
+            continue;
+          }
+        }
         // fail/frag classification is DEFERRED to line end: at fail time the
         // flood cannot know which connected ink a LATER try will read (a
         // box remnant kerned into "TELL ME" measures 22px here, but its
@@ -1478,6 +1507,13 @@
       } else if (!fails.length || r.col > fails[fails.length - 1] + 4) {
         fails.push(r.col);
         failPix.set(r.col, dead);
+        // coloured ink read as coverage (LAWS §9) that no glyph explained —
+        // counted apart, so a page's neutral-text □ stays comparable
+        if (page.converted) {
+          let col = 0;
+          for (const k of dead) if (page.converted[(k & 0xffff) * W + (k >> 16)]) col++;
+          if (col * 2 >= dead.length) colourFails.push(r.col);
+        }
       } else {
         failPix.get(fails[fails.length - 1])?.push(...dead);  // same □ blob, merged
       }
@@ -1492,14 +1528,14 @@
     // register), so the residual is just its sum — no second full-window scan.
     let residual = 0;
     for (let x = 0; x < bw; x++) residual += unexpl[x];
-    return { glyphs, fails, frags, failPix, residual, canvas, y0, y1, xFrom, xTo };
+    return { glyphs, fails, frags, failPix, colourFails, residual, canvas, y0, y1, xFrom, xTo };
   }
 
   // try to read the first few glyphs of a band at a candidate (baseline, set, phy);
   // returns matched-ink score. maxFails bounds the work on wrong hypotheses —
   // without it a bad baseline absorbs the whole band column by column.
-  function probeBaseline(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot) {
-    const line = scanLine(page, mask, set, phy, baseline, x0, Math.min(x1, x0 + 160), 4, 2, TOL, quant, null, bandTop, explained, bandBot);
+  function probeBaseline(page, mask, set, phy, baseline, x0, x1, TOL, quant, bandTop, explained, bandBot, opts = null) {
+    const line = scanLine(page, mask, set, phy, baseline, x0, Math.min(x1, x0 + 160), 4, 2, TOL, quant, null, bandTop, explained, bandBot, opts);
     return line.glyphs.reduce((s, g) => s + g.exact, 0) - line.fails.length * 20;
   }
 
@@ -1556,6 +1592,15 @@
     // ladder (up to 7 readPage calls on the SAME page when nothing reads) pays
     // for it once. Keyed on the gray buffer's identity: a caller that
     // re-rasterizes or whitens anew gets a fresh compute.
+    // coloured text read as coverage (colourInk, LAWS §9) yields black-ink
+    // bytes the producer never quantized as gray. On a palette page they
+    // must live in the page's NEUTRAL gray space: the map is built from the
+    // pixels that were gray to begin with (a converted 216 beside a palette
+    // 215 would otherwise make 216 "available" and fail every 215 on the
+    // page — `email` lost 555 glyphs that way), and every converted pixel
+    // is snapped through it once, before objects and bands are found.
+    if (page.converted && opts?.quant && !page._snapped)
+      snapConverted(page, opts.quant.length === 256 ? opts.quant : quantMap(page));
     let det = page._det;
     if (!det || det.gray !== page.gray) {
       const d = detectObjects(page);
@@ -1566,7 +1611,7 @@
     // 256-entry LUT is applied as-is — for producers whose true palette is
     // known (the bench reads it from the PDF's /Indexed colorspace).
     const quant = opts?.quant
-      ? (opts.quant.length === 256 ? opts.quant : (det.quant ??= quantMap(page)))
+      ? (opts.quant.length === 256 ? opts.quant : (det.quant ??= (page._snapped || quantMap(page))))
       : null;
     const q = quant ? v => quant[v] : v => v;
     const { mask, objects } = det;
@@ -1582,6 +1627,9 @@
       o.y1 >= b.y0 - 2 && o.y0 <= b.y1 + 2 && Math.min(o.x1, b.x1) > Math.max(o.x0, b.x0));
     const halos = objects.filter(o => o.type === 'box' || isBoxSlice(o))
       .map(o => [o.x0 - 2, o.x1 + 2, o.y0 - 3, o.y1 + 3]);
+    // rules whose broken-off pieces the scan may absorb (scanLine opts.rules):
+    // rules that are not a box's thin slice
+    const scanOpts = { rules: objects.filter(o => o.type === 'rule' && !isBoxSlice(o)), shadow: !!opts?.shadow };
     const bands = det.bands;
     const lines = [];
     // ink already explained by an earlier line's scan window: a line without
@@ -1666,7 +1714,7 @@
           if (hint.below ? (yb <= bot || yb > bot + hint.set.maxAsc)
                          : (yb <= top || yb > bot || yb < bot - hint.set.maxDesc)) continue;
           const probe = scanLine(page, mask, hint.set, hint.phy, yb,
-            Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top, explained, clampBot);
+            Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top, explained, clampBot, scanOpts);
           if (probe.glyphs.length >= 3 && probe.fails.length === 0)
             pick = { set: hint.set, phy: hint.phy, yb, below: hint.below,
               score: probe.glyphs.reduce((s, g) => s + g.exact, 0) };
@@ -1674,7 +1722,7 @@
       if (!pick && last) {
         for (let yb = bot; yb >= bot - last.set.maxDesc && yb > top && !pick; yb--) {
           const probe = scanLine(page, mask, last.set, last.phy, yb,
-            Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top, explained, clampBot);
+            Math.max(0, xp - 2), Math.min(page.w, Math.max(0, xp - 2) + 160), 4, 0, tol, quant, null, top, explained, clampBot, scanOpts);
           if (probe.glyphs.length >= 3 && probe.fails.length === 0)
             pick = { set: last.set, phy: last.phy, yb,
               score: probe.glyphs.reduce((s, g) => s + g.exact, 0) };
@@ -1687,7 +1735,7 @@
       for (const set of sets)
         for (const phy of set.byPhy.keys())
           for (let yb = bot; yb >= bot - set.maxDesc && yb > top; yb--) {
-            const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
+            const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot, scanOpts);
             if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score };
           }
       // non-glyph ink BELOW the text (an unmasked box-corner fringe, a stray
@@ -1700,7 +1748,7 @@
         for (const set of sets)
           for (const phy of set.byPhy.keys())
             for (let yb = bot - set.maxDesc - 1; yb >= bot - set.maxDesc - 3 && yb > top; yb--) {
-              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
+              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot, scanOpts);
               if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score };
             }
       // glyphs whose ink sits entirely above the baseline (a row of '-' or '*':
@@ -1710,7 +1758,7 @@
         for (const set of sets)
           for (const phy of set.byPhy.keys())
             for (let yb = bot + 1; yb <= bot + set.maxAsc && yb <= page.h; yb++) {
-              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
+              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xp - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot, scanOpts);
               if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score, below: true };
             }
       // ---- PACKED LINES ----
@@ -1750,7 +1798,7 @@
             const xa = winAnchor(yb, set);
             if (xa < 0 || (skipXp && xa === xp)) continue;   // identical to a sweep above
             for (const phy of set.byPhy.keys()) {
-              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xa - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot);
+              const score = probeBaseline(page, mask, set, phy, yb, Math.max(0, xa - 2), Math.min(page.w, x1 + 20), tol, quant, top, explained, clampBot, scanOpts);
               if (score > 0 && (!pick || score > pick.score)) pick = { set, phy, yb, score };
             }
           }
@@ -1798,8 +1846,12 @@
         const dustOnly = inkN > 0 && inkN <= 12 && runMax <= 4 &&
           (inkN <= 2 || (x1 - x0 + 1) * (iy1 - iy0 + 1) >= 20 * inkN);
         if (dustOnly) return;                    // not content: emit nothing
+        let colN = 0;
+        if (page.converted && inkN)
+          for (let y = top; y < bot; y++) { const off = y * page.w;
+            for (let x = x0; x <= x1; x++) if (page.gray[off + x] < 255 && !mask[off + x] && page.converted[off + x]) colN++; }
         lines.push({ top, bot, baseline: null, glyphs: [],
-          fails: fragOnly || x1 < x0 ? [] : [x0], fragOnly,
+          fails: fragOnly || x1 < x0 ? [] : [x0], fragOnly, colour: colN * 2 >= inkN,
           residual: 0, boxes: lineObjects.map(ob => [ob.x0 - 2, ob.x1 + 2]), objects: lineObjects, set: null });
       };
       if (!pick) { pushUnread(); continue; }
@@ -1842,8 +1894,7 @@
         }
       }
       const L = scanLine(page, mask, pick.set, pick.phy, pick.yb,
-        Math.max(0, x0 - 2), Math.min(page.w, x1 + 4), Infinity, Infinity, tol, quant, halos, top, explained, clampBot,
-        opts?.shadow ? { shadow: true } : null);
+        Math.max(0, x0 - 2), Math.min(page.w, x1 + 4), Infinity, Infinity, tol, quant, halos, top, explained, clampBot, scanOpts);
       // a "line" that read NOTHING has no certified baseline — it is an unread
       // band (a dot-only band above a real line probes into that line's glyphs
       // through the +20px window, picks a shifted-but-equivalent baseline, then
@@ -1942,8 +1993,128 @@
     }), objects };
   }
 
+  // snap every converted pixel of a page into palette space through Q, once
+  // (the reader does it before objects and bands are found; Recto's pixel
+  // view does it to its own copy of the page, so both compare the same bytes)
+  function snapConverted(page, Q) {
+    if (!page.converted || page._snapped) return page;
+    for (let i = 0; i < page.gray.length; i++) if (page.converted[i]) page.gray[i] = Q[page.gray[i]];
+    page._snapped = Q;
+    page._det = null;
+    return page;
+  }
+
+  // ---- coloured ink as coverage (docs/LAWS.md §9) ----
+  // mupdf composites a coloured pen over white per channel, integer math:
+  //   page_c = (65280 − (255 − C_c) · e) >> 8       e = cov + (cov >> 7)
+  // so a coloured glyph is the SAME coverage as its black twin, seen through
+  // the pen. Recover e from the channels and the black-ink byte is
+  // (255 · (256 − e)) >> 8 — the byte every glyph set already holds — and
+  // the reader reads coloured text with the sets it has, instead of
+  // whitening it away. What is not a pen's ramp (a seal, a multicolour
+  // emblem) is whitened as before: the certificate means nothing over it.
+  //
+  // rgb: bytes with `stride` per pixel (3 = RGB, 4 = RGBA). Returns
+  // { gray, converted (1 where a pixel was read as coverage), convertedN,
+  //   removed (whitened px), pens: [[r,g,b,count]…] }.
+  //
+  // Pens are the page's own: dark (≥ 128 below white) saturated (spread
+  // ≥ 32) colours that occur fully covered at least 20 times, taken darkest
+  // first and skipping any colour a darker pen already explains as part of
+  // its ramp. Coloured components are what the whitening flood always took
+  // (seeds spread ≥ 4, flood through spread ≥ 1); a component is TEXT when
+  // one pen explains at least three quarters of its pixels within ±1 per
+  // channel (JPEG jitter) — measured bimodal: 0.87–1.0 on every text
+  // component of three documents, 0.15 on the DOJ seal — and is converted
+  // with that pen; anything else is whitened.
+  function colourInk(w, h, rgb, stride) {
+    const N = w * h;
+    const gray = new Uint8Array(N), spread = new Uint8Array(N), converted = new Uint8Array(N);
+    let anyCol = false;
+    for (let i = 0, o = 0; i < N; i++, o += stride) {
+      const r = rgb[o], g = rgb[o + 1], b = rgb[o + 2];
+      const mx = r > g ? (r > b ? r : b) : (g > b ? g : b);
+      const mn = r < g ? (r < b ? r : b) : (g < b ? g : b);
+      spread[i] = mx - mn;
+      gray[i] = Math.round((r + g + b) / 3);           // neutral / jittered: back to gray
+      if (spread[i] >= 4) anyCol = true;
+    }
+    if (!anyCol) return { gray, converted, convertedN: 0, removed: 0, pens: [] };
+    const pred = (C, e) => (65280 - (255 - C) * e) >> 8;
+    // coverage that best reproduces (r,g,b) under pen C: [e, max channel error]
+    const fitE = (C, r, g, b) => {
+      let ch = 0, best = 255 - C[0];                   // the channel with the most contrast pins e
+      if (255 - C[1] > best) { ch = 1; best = 255 - C[1]; }
+      if (255 - C[2] > best) { ch = 2; best = 255 - C[2]; }
+      const pv = ch === 0 ? r : ch === 1 ? g : b;
+      const e0 = best > 0 ? Math.floor((65280 - 256 * pv) / best) : 0;
+      let bestE = 0, bestErr = 1e9;
+      for (let e = Math.max(0, e0 - 2); e <= Math.min(256, e0 + 2); e++) {
+        const dr = Math.abs(pred(C[0], e) - r), dg = Math.abs(pred(C[1], e) - g), db = Math.abs(pred(C[2], e) - b);
+        const err = dr > dg ? (dr > db ? dr : db) : (dg > db ? dg : db);
+        if (err < bestErr) { bestErr = err; bestE = e; }
+      }
+      return [bestE, bestErr];
+    };
+    const hist = new Map();                            // fully covered saturated colours
+    for (let i = 0, o = 0; i < N; i++, o += stride)
+      if (spread[i] >= 32 && 255 - gray[i] >= 128) {
+        const k = (rgb[o] << 16) | (rgb[o + 1] << 8) | rgb[o + 2];
+        hist.set(k, (hist.get(k) || 0) + 1);
+      }
+    const cand = [];
+    for (const [k, c] of hist) if (c >= 20) cand.push({ C: [k >> 16, (k >> 8) & 255, k & 255], c });
+    cand.sort((a, b) => (a.C[0] + a.C[1] + a.C[2]) - (b.C[0] + b.C[1] + b.C[2]));
+    const pens = [];
+    for (const q of cand) if (!pens.some(p => fitE(p.C, q.C[0], q.C[1], q.C[2])[1] <= 1)) pens.push(q);
+    const comp = new Int32Array(N).fill(-1);           // coloured components: the whitening flood's own set
+    let removed = 0, convertedN = 0;
+    const stack = [];
+    for (let s0 = 0; s0 < N; s0++) {
+      if (spread[s0] < 4 || comp[s0] >= 0) continue;
+      const members = [];
+      comp[s0] = s0; stack.push(s0);
+      while (stack.length) {
+        const j = stack.pop(); members.push(j);
+        const x = j % w, y = (j / w) | 0;
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const k = ny * w + nx;
+          if (comp[k] < 0 && spread[k] >= 1) { comp[k] = s0; stack.push(k); }
+        }
+      }
+      // the one pen that explains this component — judged on its DARK pixels
+      // (≥ 64 below white): near white every ramp converges and any pen
+      // fits, so a light halo of JPEG chroma noise around black text would
+      // pass as "text" under whatever pen the page has (it did, on `email`:
+      // its AA pixels came back a byte off and 555 glyphs failed). A text
+      // component has a dark core; a component with none is noise or a
+      // fringe and is whitened, as before.
+      const core = [];
+      for (const i of members) if (gray[i] <= 191) core.push(i);
+      let bestP = null, bestOk = -1;
+      for (const p of pens) {
+        let ok = 0;
+        for (const i of core) { const o = i * stride; if (fitE(p.C, rgb[o], rgb[o + 1], rgb[o + 2])[1] <= 1) ok++; }
+        if (ok > bestOk) { bestOk = ok; bestP = p; }
+      }
+      if (bestP && core.length >= 4 && bestOk >= 0.75 * core.length) {
+        for (const i of members) {
+          const o = i * stride;
+          const e = fitE(bestP.C, rgb[o], rgb[o + 1], rgb[o + 2])[0];
+          gray[i] = (255 * (256 - e)) >> 8;
+          converted[i] = 1; convertedN++;
+        }
+      } else {
+        for (const i of members) { gray[i] = 255; removed++; }
+      }
+    }
+    return { gray, converted, convertedN, removed, pens: pens.map(p => [p.C[0], p.C[1], p.C[2], p.c]) };
+  }
+
   const api = { unionSets, quantMap, detectObjects, findBands, anchorGroups,
-    CHAIN_PROBES, scanLine, probeBaseline, spaceCalib, readPage };
+    CHAIN_PROBES, scanLine, probeBaseline, spaceCalib, readPage, colourInk, snapConverted };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OCREngine = api;
 })(typeof self !== 'undefined' ? self : this);

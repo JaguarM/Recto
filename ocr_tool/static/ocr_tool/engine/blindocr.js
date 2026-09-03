@@ -154,40 +154,16 @@
     const { w, h } = page, n = w * h, g = page.gray;
     const colored = new Uint8Array(n), stack = [];
     if (rgba) {
-      // channel spread ≥ 4 = real color; the flood below spreads only
-      // through pixels whose channels differ at all (colored AA fringes),
-      // never through neutral ink — a redaction box touching a blue link
-      // underline survives while the underline vanishes. Spread 1-3 away
-      // from color is producer JPEG jitter, NOT color: its true gray is
-      // round((R+G+B)/3) (±1 single-channel jitter rounds back exactly;
-      // heavier jitter lands within tol 1).
-      const spread = new Uint8Array(n);
-      for (let i = 0; i < n; i++) {
-        if (g[i] >= 255) continue;
-        const r = rgba[i * 4], gr = rgba[i * 4 + 1], b = rgba[i * 4 + 2];
-        const mx = r > gr ? (r > b ? r : b) : (gr > b ? gr : b);
-        const mn = r < gr ? (r < b ? r : b) : (gr < b ? gr : b);
-        spread[i] = mx - mn;
-        if (spread[i] >= 4) { colored[i] = 1; stack.push(i); }
+      // ONE implementation of the colour law (Engine.colourInk, LAWS §9):
+      // coloured TEXT is read as the coverage it is, through its pen; what
+      // no pen explains is whitened as before
+      const c = Engine.colourInk(w, h, rgba, 4);
+      if (!c.removed && !c.convertedN) {
+        let same = true;
+        for (let i = 0; i < n && same; i++) if (c.gray[i] !== g[i]) same = false;
+        if (same) return page;
       }
-      if (!stack.length && !spread.some(v => v)) return page;
-      const gray = Float32Array.from(g);
-      while (stack.length) {                           // flood through colored px only
-        const i = stack.pop(), x = i % w, y = (i / w) | 0;
-        for (let dy = -1; dy <= 1; dy++)
-          for (let dx = -1; dx <= 1; dx++) {
-            const nx = x + dx, ny = y + dy;
-            if (nx < 0 || nx >= w || ny < 0 || ny >= h) continue;
-            const j = ny * w + nx;
-            if (!colored[j] && spread[j]) { colored[j] = 1; stack.push(j); }
-          }
-      }
-      let removed = 0;
-      for (let i = 0; i < n; i++) {
-        if (colored[i]) { gray[i] = 255; removed++; }
-        else if (spread[i]) gray[i] = Math.round(gray[i]);   // jitter → neutral
-      }
-      return { w, h, gray, colorRemoved: removed };
+      return { w, h, gray: Float32Array.from(c.gray), colorRemoved: c.removed, colorRead: c.convertedN, converted: c.converted };
     }
     // no RGBA (cached page): fractional gray = non-neutral (sum-only law)
     for (let i = 0; i < n; i++) {
@@ -332,7 +308,7 @@
 
   const api = { loadSets, readPage, readPageAuto, blindPasses, passLabel,
     detectObjects: Engine.detectObjects, findBands: Engine.findBands,
-    scanLine: Engine.scanLine, whitenColored, quantMap: Engine.quantMap,
+    scanLine: Engine.scanLine, whitenColored, quantMap: Engine.quantMap, snapConverted: Engine.snapConverted,
     unionSets: Engine.unionSets };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BlindOCR = api;

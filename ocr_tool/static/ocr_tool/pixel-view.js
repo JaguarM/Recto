@@ -174,7 +174,14 @@ function pvPageInfo(pageNum) {
   return info;
 }
 function pvQuant(info) {
-  if (!info.quant) info.quant = BlindOCR.quantMap(info.page);
+  if (!info.quant) {
+    // the same map the reader built (converted colour pixels are left out of
+    // the available grays), and the same snapping of those pixels into it —
+    // so a line read through the palette is compared against the bytes the
+    // reader saw (tol0 LAWS §9)
+    info.quant = BlindOCR.quantMap(info.page);
+    if (info.page.converted && BlindOCR.snapConverted) BlindOCR.snapConverted(info.page, info.quant);
+  }
   return info.quant;
 }
 
