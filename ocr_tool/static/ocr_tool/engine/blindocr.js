@@ -163,7 +163,8 @@
         for (let i = 0; i < n && same; i++) if (c.gray[i] !== g[i]) same = false;
         if (same) return page;
       }
-      return { w, h, gray: Float32Array.from(c.gray), colorRemoved: c.removed, colorRead: c.convertedN, converted: c.converted };
+      return { w, h, gray: Float32Array.from(c.gray), colorRemoved: c.removed, colorRead: c.convertedN,
+        converted: c.convertedN ? c.converted : null, bandLo: c.bandLo, bandHi: c.bandHi };
     }
     // no RGBA (cached page): fractional gray = non-neutral (sum-only law)
     for (let i = 0; i < n; i++) {

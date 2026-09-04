@@ -71,6 +71,31 @@
     return Q;
   }
 
+  // ---- what a page pixel accepts (LAWS §2, §4, §9) ----
+  // Every compare in the scanner asks one question: may a glyph predict this
+  // black-ink byte at this pixel? Two answers, and ONE place that knows which
+  // applies:
+  //   plain gray   the page byte itself, through the palette map (§4);
+  //   coloured     a RANGE — the producer composited the pen over white and
+  //                quantized the page in COLOUR, so the colour that survives
+  //                is consistent with a SET of coverages, not one (§9). The
+  //                range is page.bandLo/bandHi, built by colourInk; on a page
+  //                that was never quantized it collapses to a single byte.
+  // "darker" is the other half of the question: the page is darker than the
+  // prediction, so a later glyph may still explain it (held pending).
+  function acceptor(page, QUANT) {
+    const g = page.gray, q = QUANT ? v => QUANT[v] : v => v;
+    const conv = page.converted, lo = page.bandLo, hi = page.bandHi;
+    if (!conv || !lo || !hi) return {
+      ok: (i, p, t) => Math.abs(q(p) - g[i]) <= t,
+      darker: (i, p, t) => g[i] < q(p) - t,
+    };
+    return {
+      ok: (i, p, t) => (conv[i] ? p >= lo[i] - t && p <= hi[i] + t : Math.abs(q(p) - g[i]) <= t),
+      darker: (i, p, t) => (conv[i] ? p - t > hi[i] : g[i] < q(p) - t),
+    };
+  }
+
   // ---- non-text objects (rules, redaction boxes) ----
   // Long near-solid horizontal ink runs cannot be glyphs. Thin groups (≤4 rows)
   // are rules/underlines, tall groups are boxes. Their pixels (padded for AA
@@ -928,6 +953,8 @@
     const rules = (opts && opts.rules) || null;
     const inHalo = (x, y) => halos && halos.some(h => x >= h[0] && x < h[1] && y >= h[2] && y < h[3]);
     const q = QUANT ? v => QUANT[v] : v => v;           // palette law (see quantMap)
+    // does the page accept this prediction here? (see acceptor above)
+    const ACC = acceptor(page, QUANT), okAt = ACC.ok, darkerAt = ACC.darker;
     const lin = set.linear;
     const W = page.w, cands = set.byPhy.get(phy) ?? [];
     // explained-ink canvas over the band window (white = nothing explained
@@ -963,6 +990,7 @@
     const edgeMap = mask._edge ?? null, edgeVMap = mask._edgeV ?? null;
     const colInk = scratchCol.ink, colOpen = scratchCol.open;   // tryCand scratch, per glyph column (zeroed where used)
     const pageAt = (x, y) => page.gray[y * W + x];
+    const convAt = page.converted ? (x, y) => page.converted[y * W + x] : () => 0;
     const masked = (x, y) => skip[(y - y0) * bw + (x - xFrom)];
     const canAt = (x, y) => canvas[(y - y0) * bw + (x - xFrom)];
     const shAt = (x, y) => (lin ? shifts[(y - y0) * bw + (x - xFrom)] : 0);
@@ -1006,10 +1034,10 @@
     // after every glyph (the rescan was 80%+ of read time on dense pages).
     // One row-major pass; rows the per-row flags prove carry no mask/explained
     // cells (the common case — probes on virgin bands) reduce to a bare
-    // ink-count against q(255). Absorbed cells hold canvas = page and page
-    // bytes are palette FIXPOINTS (quantMap's available set is read off the
-    // page itself), so they can only count as unexplained under a foreign
-    // QUANT — kept exact via the explicit QUANT[pv] check.
+    // ink-count against q(255). Absorbed cells hold canvas = page, and a page
+    // byte is normally accepted where it stands (palette grays are fixpoints
+    // — quantMap's available set is read off the page itself); where it is
+    // not, the absorb step retires the pixel explicitly (see there).
     const unexpl = pooled ? (scratchUnexpl.length < bw ? (scratchUnexpl = new Int32Array(bw * 2)) : scratchUnexpl.fill(0, 0, bw)) : new Int32Array(bw);
     {
       const g = page.gray, mRows = mask._rows, eRows = explained ? explained._rows : null;
@@ -1042,20 +1070,19 @@
                 canvas[co + x] = g[po + x];
                 skip[co + x] = mask[po + x] === 2 ? 3 : 1;
               }
-            } else if (judged && g[po + x] !== q255) unexpl[x - xFrom]++;
+            } else if (judged && !okAt(po + x, 255, 0)) unexpl[x - xFrom]++;
           }
         } else if (judged) {
           for (let x = xFrom; x < xTo; x++)
-            if (g[po + x] !== q255) unexpl[x - xFrom]++;
+            if (!okAt(po + x, 255, 0)) unexpl[x - xFrom]++;
         }
       }
     }
     const setCan = (x, y, v) => {
-      const i = (y - y0) * bw + (x - xFrom);
-      const pv = page.gray[y * W + x];
-      const before = pv !== q(canvas[i]);
+      const i = (y - y0) * bw + (x - xFrom), pOff = y * W + x;
+      const before = !okAt(pOff, canvas[i], 0);
       canvas[i] = v;
-      const after = pv !== q(v);
+      const after = !okAt(pOff, v, 0);
       if (y >= cTop && y < cBot && before !== after && !isEdge[i]) unexpl[x - xFrom] += after ? 1 : -1;
     };
     const nextUnexplained = (fromX) => {
@@ -1145,9 +1172,8 @@
         // law): blending the glyph's alpha over white reproduces gb by
         // construction — pred === gb — so one compare suffices
         if (cv === 255 && !linG && !DBG_PIX) {
-          const d = QUANT ? QUANT[gb] : gb;
-          if (pv >= d - TOL && pv <= d + TOL) { exact++; if (cc === anchorRel) anchorHit++; }
-          else if (pv < d - TOL) pending++;              // darker: future glyph may composite
+          if (okAt(pOff, gb, TOL)) { exact++; if (cc === anchorRel) anchorHit++; }
+          else if (darkerAt(pOff, gb, TOL)) pending++;   // darker: future glyph may composite
           else return null;
           continue;
         }
@@ -1165,12 +1191,12 @@
           for (let kk = kLo; kk <= kHi; kk++) {
             const p = (gb * kk) >> 8;
             if (p < lo) lo = p;
-            if (Math.abs(q(p) - pv) <= (TOL ? 2 * TOL : 0)) ok = true;
+            if (okAt(pOff, p, TOL ? 2 * TOL : 0)) ok = true;
           }
           if (DBG_PIX && HAS_ENV && +process.env.BR_PIX === col && !ok)
             console.log(`      edge '${g.ch}' pen ${pi + g.phx} @(${gx + cc},${gy + rr}) gb=${gb} edge=${cv} k=${kLo}..${kHi} pred=${lo} pv=${pv}`);
           if (ok) { exact++; if (cc === anchorRel) anchorHit++; }
-          else if (pv < q(lo)) pending++;
+          else if (darkerAt(pOff, lo, 0)) pending++;
           else return null;
           continue;
         }
@@ -1193,16 +1219,16 @@
           // composite pixels may read 1 lighter than the law: the producer's
           // junction arithmetic is 1-ambiguous there (3/925 fitted pairs,
           // always this sign) — single-glyph pixels stay byte-strict
-          hit = Math.abs(q(minPred) - pv) <= t || (cv !== 255 && q(minPred) - pv === 1);
+          hit = okAt(pOff, minPred, t) || (cv !== 255 && q(minPred) - pv === 1);
         } else {
           const e = a + (a >> 7);
           minPred = (cv * (256 - e)) >> 8;
-          hit = Math.abs(q(minPred) - pv) <= t;
+          hit = okAt(pOff, minPred, t);
         }
         if (DBG_PIX && HAS_ENV && +process.env.BR_PIX === col && !hit)
           console.log(`      pix '${g.ch}' pen ${pi + g.phx} @(${gx + cc},${gy + rr}) gb=${gb} cv=${cv} pv=${pv} minPred=${minPred}`);
         if (hit) { exact++; if (cc === anchorRel) anchorHit++; }
-        else if (pv < q(minPred) - t) pending++;         // darker: future glyph may composite
+        else if (darkerAt(pOff, minPred, t)) pending++;  // darker: future glyph may composite
         else return null;
       }
       // pending is for kern overlap (a few columns) — a glyph "hiding" inside
@@ -1266,7 +1292,7 @@
       let n = 0;
       for (let y = cTop; y < cBot; y++) {
         const i = (y - y0) * bw + (x - xFrom);
-        if (!skip[i] && page.gray[y * W + x] !== q(canvas[i])) n++;
+        if (!skip[i] && !okAt(y * W + x, canvas[i], 0)) n++;
       }
       return n;
     };
@@ -1274,7 +1300,7 @@
       for (let x = Math.max(fromX, xFrom); x < xTo; x++)
         for (let y = cTop; y < cBot; y++) {
           const i = (y - y0) * bw + (x - xFrom);
-          if (isEdgeV[i] && page.gray[y * W + x] !== q(canvas[i])) return x;
+          if (isEdgeV[i] && !okAt(y * W + x, canvas[i], 0)) return x;
         }
       return -1;
     };
@@ -1449,14 +1475,14 @@
           const px = [];
           for (let x = col; x < Math.min(col + 3, xTo); x++)
             for (let y = cTop; y < cBot; y++)
-              if (pageAt(x, y) !== q(canAt(x, y))) px.push([x, y]);
+              if (!okAt(y * W + x, canAt(x, y), 0)) px.push([x, y]);
           const okDust = px.length <= 3 && px.every(([x, y]) => {
-            if (pageAt(x, y) >= 255 - 6 * TOL && Math.abs(pageAt(x, y) - q(canAt(x, y))) <= 6 * TOL) return true;
+            if (pageAt(x, y) >= 255 - 6 * TOL && okAt(y * W + x, canAt(x, y), 6 * TOL)) return true;
             for (let dy = -1; dy <= 1; dy++)
               for (let dx = -1; dx <= 1; dx++) {
                 const nx = x + dx, ny = y + dy;
                 if (nx >= xFrom && nx < xTo && ny >= y0 && ny < y1 &&
-                    canAt(nx, ny) < 255 && pageAt(nx, ny) === q(canAt(nx, ny))) return true;
+                    canAt(nx, ny) < 255 && okAt(ny * W + nx, canAt(nx, ny), 0)) return true;
               }
             return false;
           });
@@ -1469,10 +1495,9 @@
             }
             for (const [x, y] of px) {
               setCan(x, y, pageAt(x, y));
-              // same retire rule as the fail-absorb: a non-fixpoint dust
-              // byte would stay "unexplained" forever and livelock here
-              const pv = pageAt(x, y);
-              if (QUANT && pv !== QUANT[pv] && !skip[(y - y0) * bw + (x - xFrom)]) {
+              // same retire rule as the fail-absorb: a byte the page cannot
+              // accept would stay "unexplained" forever and livelock here
+              if (!okAt(y * W + x, pageAt(x, y), 0) && !skip[(y - y0) * bw + (x - xFrom)]) {
                 skip[(y - y0) * bw + (x - xFrom)] = 1;
                 if (y >= cTop && y < cBot) unexpl[x - xFrom]--;
               }
@@ -1487,7 +1512,7 @@
         if (DBG_ON && maxGlyphs === Infinity) {
           console.log(`    fail @col ${col} baseline ${baseline}`);
           for (let y = cTop; y < cBot; y++)
-            if (pageAt(col, y) !== canAt(col, y))
+            if (!okAt(y * W + col, canAt(col, y), 0))
               console.log(`      unexplained (${col},${y}) page=${pageAt(col, y)} canvas=${canAt(col, y)}`);
         }
         // Flood the connected components of unexplained ink through the fail
@@ -1523,7 +1548,7 @@
           let stack = flStack, sp = 0;
           for (let y = cTop, ci = (cTop - y0) * bw + (col - xFrom); y < cBot; y++, ci += bw) {
             const cv = canvas[ci];
-            if (g[y * W + col] !== (QUANT ? QUANT[cv] : cv) && !skip[ci] && !isEdge[ci]) {
+            if (!okAt(y * W + col, cv, 0) && !skip[ci] && !isEdge[ci]) {
               if (sp === stack.length) flStack = stack = growStack(stack);
               stack[sp++] = col << 16 | y;
             }
@@ -1546,7 +1571,7 @@
                 const pv = g[nrow + dx];
                 if (pv >= 255 || skip[nci] || isEdge[nci]) continue;
                 const cv = canvas[nci];
-                if (pv === (QUANT ? QUANT[cv] : cv)) continue;
+                if (okAt(nrow + dx, cv, 0)) continue;
                 if (sp === stack.length) flStack = stack = growStack(stack);
                 stack[sp++] = (px + dx) << 16 | (py + dy);
               }
@@ -1559,11 +1584,14 @@
           if (px <= col + 2) {
             setCan(px, py, pageAt(px, py));
             skip[(py - y0) * bw + (px - xFrom)] = 2;   // 2 = fail-absorbed (see `revive`)
-            // absorbed = retired, even when the byte is no fixpoint of a
-            // foreign QUANT (setCan's fixpoint rule then leaves it counted
-            // and the loop re-enters this column forever). Fixpoint bytes
-            // were already retired by setCan — this is a no-op for them.
-            if (py >= cTop && py < cBot && QUANT && pageAt(px, py) !== QUANT[pageAt(px, py)])
+            // ABSORBED = RETIRED. setCan retires the pixel only if the page
+            // ACCEPTS the byte just written; a byte the page cannot accept —
+            // no fixpoint of a foreign palette, or outside a colour pixel's
+            // band (§9) — would stay counted and the loop would re-enter this
+            // column forever (EFTA00093044 p332, 13 h CPU; nimbusrom p2 with
+            // colour bands, 4 GB of flood components). Accepted bytes were
+            // already retired by setCan, so this is a no-op for them.
+            if (py >= cTop && py < cBot && !okAt(py * W + px, pageAt(px, py), 0))
               unexpl[px - xFrom]--;
           }
         }
@@ -1616,15 +1644,17 @@
         if (g.lin ?? lin) {
           const sh = gb >= 129 && gb !== 255 ? 1 : 0, s0 = shAt(x, y);
           const pred = (((cv - s0) * ga) / 255 | 0) + s0 + sh;   // ga = raw byte (gb − sh)
-          const ok = Math.abs(q(pred) - pv) <= t ||
+          const ok = okAt(y * W + x, pred, t) ||
                      (cv !== 255 && q(pred) - pv === 1);   // composite 1-lighter case
-          val = ok ? (QUANT ? pred : pv) : pred;        // quant: canvas stays original-space
+          val = ok && !QUANT && !convAt(x, y) ? pv : pred;
           addSh(x, y, sh);
         } else {
           const e = ga + (ga >> 7);                     // single prediction (see tryCand)
           const pred = (cv * (256 - e)) >> 8;
-          val = Math.abs(q(pred) - pv) <= t
-            ? (QUANT ? pred : pv) : pred;               // absorb page value on a hit
+          // the canvas holds the COVERAGE state, so it may absorb the page
+          // value only where that IS the coverage: not on a palette page,
+          // not on a colour pixel whose byte is a recovered coverage (§9)
+          val = okAt(y * W + x, pred, t) && !QUANT && !convAt(x, y) ? pv : pred;
         }
         setCan(x, y, val);
       }
@@ -1764,13 +1794,11 @@
     // re-rasterizes or whitens anew gets a fresh compute.
     // coloured text read as coverage (colourInk, LAWS §9) yields black-ink
     // bytes the producer never quantized as gray. On a palette page they
-    // must live in the page's NEUTRAL gray space: the map is built from the
+    // are compared through an acceptance BAND, not through the gray map (§9):
+    // the producer quantized those pixels in COLOUR. The gray map is built from the
     // pixels that were gray to begin with (a converted 216 beside a palette
     // 215 would otherwise make 216 "available" and fail every 215 on the
-    // page — `email` lost 555 glyphs that way), and every converted pixel
-    // is snapped through it once, before objects and bands are found.
-    if (page.converted && opts?.quant && !page._snapped)
-      snapConverted(page, opts.quant.length === 256 ? opts.quant : quantMap(page));
+    // page — `email` lost 555 glyphs that way).
     let det = page._det;
     if (!det || det.gray !== page.gray) {
       const d = detectObjects(page);
@@ -1784,6 +1812,7 @@
       ? (opts.quant.length === 256 ? opts.quant : (det.quant ??= (page._snapped || quantMap(page))))
       : null;
     const q = quant ? v => quant[v] : v => v;
+    const ACC = acceptor(page, quant);                 // the page's acceptance law
     const { mask, objects } = det;
     // box halos (rect ±2): an unexplained cluster that TOUCHES a halo and is
     // NARROW (< 13px — under two glyph widths) is a fragment of the box's own
@@ -2109,7 +2138,7 @@
         for (let y = L.y0; y < L.y1; y++)
           for (let x = L.xFrom; x < L.xTo; x++) {
             const v = L.canvas[(y - L.y0) * lw + (x - L.xFrom)];
-            if (v < 255 && page.gray[y * page.w + x] === q(v) && !mask[y * page.w + x])
+            if (v < 255 && ACC.ok(y * page.w + x, v, 0) && !mask[y * page.w + x])
               (y < bot ? inBand++ : below++);
           }
         if (below > inBand) { pushUnread(); continue; }
@@ -2122,7 +2151,7 @@
       for (let y = L.y0; y < L.y1; y++)
         for (let x = L.xFrom; x < L.xTo; x++)
           if (page.gray[y * page.w + x] < 255 &&
-              page.gray[y * page.w + x] === q(L.canvas[(y - L.y0) * (L.xTo - L.xFrom) + (x - L.xFrom)]) &&
+              ACC.ok(y * page.w + x, L.canvas[(y - L.y0) * (L.xTo - L.xFrom) + (x - L.xFrom)], 0) &&
               !deadSet.has(x << 16 | y)) {
             explained[y * page.w + x] = 1;
             explained._rows[y] = 1;
@@ -2214,7 +2243,22 @@
   //
   // rgb: bytes with `stride` per pixel (3 = RGB, 4 = RGBA). Returns
   // { gray, converted (1 where a pixel was read as coverage), convertedN,
-  //   removed (whitened px), pens: [[r,g,b,count]…] }.
+  //   removed (whitened px), pens: [[r,g,b,count]…], bandLo, bandHi }.
+  //
+  // THE BAND is what makes a palette page exact. The producer composited the
+  // pen over white and quantized the page in COLOUR; a single coverage
+  // recovered from a quantized colour is a guess, because several coverages
+  // share it. So colourInk reports, per converted pixel, the RANGE of
+  // black-ink bytes whose colour the page could have shown there — and the
+  // scanner accepts a glyph whose prediction lands in that range (acceptor
+  // above). Built per pen by walking its whole ramp e = 0..256, quantizing
+  // each predicted colour to the page's OWN colour set (every colour on the
+  // page is an entry by construction — the argument quantMap makes for
+  // grays), and grouping the coverages that land on the same colour: that
+  // group is contiguous, and gray(e) = (255·(256−e))>>8 turns it into a byte
+  // range. On a page that was never quantized every ramp colour is distinct,
+  // the group is one coverage and the band is one byte — so nothing is
+  // loosened where nothing was lost.
   //
   // Pens are the page's own: dark (≥ 128 below white) saturated (spread
   // ≥ 32) colours that occur fully covered at least 20 times, taken darkest
@@ -2237,7 +2281,7 @@
       gray[i] = Math.round((r + g + b) / 3);           // neutral / jittered: back to gray
       if (spread[i] >= 4) anyCol = true;
     }
-    if (!anyCol) return { gray, converted, convertedN: 0, removed: 0, pens: [] };
+    if (!anyCol) return { gray, converted, convertedN: 0, removed: 0, pens: [], bandLo: null, bandHi: null };
     const pred = (C, e) => (65280 - (255 - C) * e) >> 8;
     // coverage that best reproduces (r,g,b) under pen C: [e, max channel error]
     const fitE = (C, r, g, b) => {
@@ -2266,6 +2310,8 @@
     const pens = [];
     for (const q of cand) if (!pens.some(p => fitE(p.C, q.C[0], q.C[1], q.C[2])[1] <= 1)) pens.push(q);
     const comp = new Int32Array(N).fill(-1);           // coloured components: the whitening flood's own set
+    const penOf = new Map();                           // converted pixel -> the pen that explained it
+    const orphans = [];                                // tiny whitened components, revisited below
     let removed = 0, convertedN = 0;
     const stack = [];
     for (let s0 = 0; s0 < N; s0++) {
@@ -2303,12 +2349,89 @@
           const e = fitE(bestP.C, rgb[o], rgb[o + 1], rgb[o + 2])[0];
           gray[i] = (255 * (256 - e)) >> 8;
           converted[i] = 1; convertedN++;
+          penOf.set(i, pens.indexOf(bestP));
         }
       } else {
         for (const i of members) { gray[i] = 255; removed++; }
+        // …unless it is a DOT. The dark-core rule above needs four dark
+        // pixels, and the dot of an 'i', a period or a colon has one or two:
+        // on a blue link they were whitened while the word around them was
+        // read, so "visacentral.com" came back "v sacentral com". A tiny
+        // component beside converted text is that text — the same argument
+        // detectObjects' dust rule makes ("an ellipsis dot 10px from the word
+        // but 4px from its sibling dot is text") — so it is revisited below
+        // with the pen of the ink next to it, and still has to fit that pen.
+        if (members.length <= 12) orphans.push(members);
       }
     }
-    return { gray, converted, convertedN, removed, pens: pens.map(p => [p.C[0], p.C[1], p.C[2], p.c]) };
+    for (const members of orphans) {
+      let pi = -1;                                     // the pen of the nearest converted ink
+      for (const i of members) {
+        const x = i % w, y = (i / w) | 0;
+        for (let dy = -3; dy <= 3 && pi < 0; dy++) for (let dx = -3; dx <= 3; dx++) {
+          const nx = x + dx, ny = y + dy;
+          if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+          const k = ny * w + nx;
+          if (converted[k]) { pi = penOf.get(k); break; }
+        }
+        if (pi >= 0) break;
+      }
+      if (pi < 0) continue;
+      const C = pens[pi].C;
+      let fits = true;
+      for (const i of members) { const o = i * stride; if (fitE(C, rgb[o], rgb[o + 1], rgb[o + 2])[1] > 1) { fits = false; break; } }
+      if (!fits) continue;
+      for (const i of members) {
+        const o = i * stride;
+        gray[i] = (255 * (256 - fitE(C, rgb[o], rgb[o + 1], rgb[o + 2])[0])) >> 8;
+        converted[i] = 1; convertedN++; removed--;
+        penOf.set(i, pi);
+      }
+    }
+    // ---- the acceptance band (see the header) ----
+    let bandLo = null, bandHi = null;
+    if (convertedN) {
+      bandLo = new Uint8Array(N); bandHi = new Uint8Array(N);
+      // the page's own colours, among the pixels that carry any colour at all
+      const cols = [], colIx = new Map();
+      for (let i = 0, o = 0; i < N; i++, o += stride) {
+        if (!spread[i]) continue;
+        const k = (rgb[o] << 16) | (rgb[o + 1] << 8) | rgb[o + 2];
+        if (!colIx.has(k)) { colIx.set(k, cols.length); cols.push([rgb[o], rgb[o + 1], rgb[o + 2]]); }
+      }
+      const grayOf = e => (255 * (256 - e)) >> 8;
+      // per pen: quantize its whole ramp to the page's colours, then group
+      const rangeOf = new Map();                       // penIndex + ':' + colourKey -> [loByte, hiByte]
+      pens.forEach((p, pi) => {
+        const seen = new Map();
+        for (let e = 0; e <= 256; e++) {
+          const pr = pred(p.C[0], e), pg = pred(p.C[1], e), pb = pred(p.C[2], e);
+          let best = -1, bd = Infinity, bs = 0;
+          for (let c = 0; c < cols.length; c++) {
+            const C = cols[c];
+            const d = (C[0] - pr) * (C[0] - pr) + (C[1] - pg) * (C[1] - pg) + (C[2] - pb) * (C[2] - pb);
+            const sum = C[0] + C[1] + C[2];
+            if (d < bd || (d === bd && sum < bs)) { bd = d; best = c; bs = sum; }   // ties darker
+          }
+          if (best < 0) continue;
+          const C = cols[best], k = (C[0] << 16) | (C[1] << 8) | C[2];
+          const g0 = grayOf(e), r = seen.get(k);
+          if (!r) seen.set(k, [g0, g0]);
+          else { if (g0 < r[0]) r[0] = g0; if (g0 > r[1]) r[1] = g0; }
+        }
+        for (const [k, r] of seen) rangeOf.set(pi + ':' + k, r);
+      });
+      for (const [i, pi] of penOf) {
+        const o = i * stride, k = (rgb[o] << 16) | (rgb[o + 1] << 8) | rgb[o + 2];
+        const r = rangeOf.get(pi + ':' + k);
+        // a pixel the ramp never lands on is JPEG jitter off the ramp: its
+        // band is the byte it was converted to, as before the band existed
+        if (r) { bandLo[i] = r[0]; bandHi[i] = r[1]; }
+        else { bandLo[i] = gray[i]; bandHi[i] = gray[i]; }
+      }
+    }
+    return { gray, converted, convertedN, removed, bandLo, bandHi,
+      pens: pens.map(p => [p.C[0], p.C[1], p.C[2], p.c]) };
   }
 
   const api = { unionSets, quantMap, detectObjects, findBands, anchorGroups,

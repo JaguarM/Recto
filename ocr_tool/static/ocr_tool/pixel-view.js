@@ -175,12 +175,10 @@ function pvPageInfo(pageNum) {
 }
 function pvQuant(info) {
   if (!info.quant) {
-    // the same map the reader built (converted colour pixels are left out of
-    // the available grays), and the same snapping of those pixels into it —
-    // so a line read through the palette is compared against the bytes the
-    // reader saw (tol0 LAWS §9)
+    // the same map the reader built: converted colour pixels are left out of
+    // the available grays, because they are compared through their acceptance
+    // band instead (tol0 LAWS §9 — diffLine reads page.bandLo/bandHi)
     info.quant = BlindOCR.quantMap(info.page);
-    if (info.page.converted && BlindOCR.snapConverted) BlindOCR.snapConverted(info.page, info.quant);
   }
   return info.quant;
 }

@@ -181,7 +181,11 @@
 
   // ---- the diff ----
   // Compares a rendered window with the page on the window's ink pixels
-  // (rendered gray < 255). quant: a palette map (ocr-engine quantMap) for
+  // (rendered gray < 255). A page pixel whose colour the reader recovered as
+  // coverage (ocr-engine colourInk, LAWS §9) carries an acceptance BAND
+  // rather than one byte — the producer quantized it in colour — and is
+  // compared against that band, so this verdict means what the reader's
+  // certificate means. quant: a palette map (ocr-engine quantMap) for
   // producers that quantized the final page, else null. mask: the reader's
   // object mask (detectObjects — redaction boxes, rules and their padding),
   // else null: a glyph pixel under it is what the reader never compared (a
@@ -207,10 +211,14 @@
         const px = r.x0 + x;
         if (px < 0 || py < 0 || px >= page.w || py >= page.h) { outside++; continue; }
         if (mask && mask[py * page.w + px]) { masked++; continue; }
-        const pred = quant ? quant[g] : g;
-        const d = Math.abs(page.gray[py * page.w + px] - pred);
-        if (!d) continue;
+        const pOff = py * page.w + px;
         const t = T && r.hits && r.hits[i] > 1 ? 2 * T : T;
+        let d;
+        if (page.converted && page.converted[pOff] && page.bandLo) {
+          const lo = page.bandLo[pOff], hi = page.bandHi[pOff];
+          d = g < lo ? lo - g : g > hi ? g - hi : 0;     // distance to the accepted band
+        } else d = Math.abs(page.gray[pOff] - (quant ? quant[g] : g));
+        if (!d) continue;
         if (d > t) { mism[i] = 1; count++; } else within++;
       }
     }
