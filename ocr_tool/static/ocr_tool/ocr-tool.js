@@ -1,10 +1,11 @@
-// ocr-tool.js — Auto OCR plugin adapter (the only file of this app that is
-// NOT synced from char_training). Runs the blind reader (engine/blindocr.js)
-// on the page rasters the viewer already holds and feeds the results into the
-// unified text box system exactly like embedded_text_viewer feeds embedded
-// spans: one UnifiedTextBox per read line (type 'ocr'), with
-// baseCharPositions at the reader's measured ¼-px pens, plus type 'redaction'
-// boxes for detected redaction rectangles.
+// ocr-tool.js — Auto OCR plugin adapter (Recto-owned, NOT synced from tol0;
+// the others are ocr-worker.js, ocr-result.js and pixel-view.js). Runs the
+// blind reader (engine/blindocr.js) on the page rasters the viewer already
+// holds — inside a Worker (ocr-worker.js), so the page stays live while a
+// read runs — and feeds the results into the unified text box system exactly
+// like embedded_text_viewer feeds embedded spans: one UnifiedTextBox per read
+// line (type 'ocr'), with baseCharPositions at the reader's measured ¼-px
+// pens, plus type 'redaction' boxes for detected redaction rectangles.
 //
 // The engine reads the SAME pixels the user is looking at (state.pageImages =
 // the server-extracted, ratio-cropped page raster), so box coordinates line
@@ -14,7 +15,13 @@
 
 const ocrToolState = {
   engine: null,     // PageEngine (engine/ocr.js)
-  sets: null,       // parsed glyph sets
+  sets: null,       // parsed glyph sets — MAIN-thread copy: the pixel view and the inline fallback
+  setUrls: null,    // glyph bundle urls from index.json (what both threads load)
+  worker: null,     // the reader's Worker (ocr-worker.js), once ready
+  workerReady: null,  // promise of that worker; rejected = no Worker, read inline
+  workerJob: null,  // the page read in flight: { id, resolve, reject, progress }
+  workerSeq: 0,
+  readVia: null,    // 'worker' | 'inline' — where the last page read ran (the smoke test asserts 'worker')
   running: false,
   cancel: false,
   passHint: null,   // winning pass of the previous page (producer is stable)
@@ -24,6 +31,7 @@ const ocrToolState = {
 };
 
 const OCR_GLYPHS_BASE = '/static/ocr_tool/glyphs/';
+const OCR_WORKER_URL = '/static/ocr_tool/ocr-worker.js?v=1';
 const OCR_UNCLEAN_COLOR = 'rgba(230, 124, 0, 0.85)';   // non-byte-clean lines
 const OCR_UNREAD_COLOR = 'rgba(217, 48, 37, 0.85)';    // □ marker boxes
 const OCR_CACHE_BASE = '/ocr/cache/';                  // + document sha256 (state.docHash)
@@ -34,18 +42,96 @@ function setOcrStatus(msg) {
   if (el) { el.textContent = msg; el.title = msg; }  // title: full text survives the ellipsis
 }
 
-async function ocrLoadSets() {
-  if (ocrToolState.sets) return ocrToolState.sets;
+// the glyph bundle urls index.json lists (a bare glyphs.bin = every set) —
+// what the worker loads for reading and the main thread for the pixel view
+async function ocrSetUrls() {
+  if (ocrToolState.setUrls) return ocrToolState.setUrls;
   let names = [];
   try {
     const r = await fetch(OCR_GLYPHS_BASE + 'index.json', { cache: 'no-store' });
     if (r.ok) names = await r.json();
   } catch { /* fall through to the error below */ }
-  if (!names.length) throw new Error('no glyph sets — run "npm run sync:recto" in char_training');
-  const sets = await BlindOCR.loadSets(names.map(n => OCR_GLYPHS_BASE + n));
+  if (!names.length) throw new Error('no glyph sets — run "npm run sync:recto" in tol0');
+  ocrToolState.setUrls = names.map(n => OCR_GLYPHS_BASE + n);
+  return ocrToolState.setUrls;
+}
+
+// main-thread sets: the MuPDF pixel view draws from them, and a browser
+// without Workers reads with them; a worker read never needs them here
+async function ocrLoadSets() {
+  if (ocrToolState.sets) return ocrToolState.sets;
+  const sets = await BlindOCR.loadSets(await ocrSetUrls());
   if (!sets.length) throw new Error('glyph sets failed to load');
   ocrToolState.sets = sets;
   return sets;
+}
+
+// ── The reader's Worker ───────────────────────────────────────
+// The engine is synchronous and yields to the event loop only between bands;
+// a page in an unmodelled face runs the whole tolerance ladder (tens of
+// seconds with the full bundle) and used to freeze zooming and page changes
+// for that long. ocr-worker.js runs the same engine files off the main
+// thread; what comes back is the slim result (ocr-result.js), the shape the
+// precomputed cache already replays through ocrAddBoxes.
+
+// the engine scripts exactly as this page loaded them (tool.py's cache-busted
+// urls), so the worker runs the synced bytes and never a stale copy
+function ocrWorkerScripts() {
+  return [...document.querySelectorAll('script[src]')].map(el => el.src)
+    .filter(src => /\/ocr_tool\/(engine\/(core|ocr-engine|blindocr)\.js|ocr-result\.js)/.test(src));
+}
+
+// the Worker, created on first use — resolves once its engine scripts are
+// in; rejects when Workers are unavailable (the read then runs inline)
+function ocrWorker() {
+  if (ocrToolState.workerReady) return ocrToolState.workerReady;
+  ocrToolState.workerReady = new Promise((resolve, reject) => {
+    if (typeof Worker === 'undefined') return reject(new Error('no Worker support'));
+    const scripts = ocrWorkerScripts();
+    if (scripts.length < 4) return reject(new Error('engine scripts not found on the page'));
+    let w;
+    try { w = new Worker(OCR_WORKER_URL); } catch (e) { return reject(e); }
+    const fail = (err) => {
+      reject(err);
+      const job = ocrToolState.workerJob;
+      if (job) { ocrToolState.workerJob = null; job.reject(err); }
+    };
+    w.onerror = (e) => fail(e.error || new Error(e.message || 'OCR worker error'));
+    w.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === 'ready') { ocrToolState.worker = w; resolve(w); return; }
+      if (m.type === 'error' && m.id === null) { fail(new Error(m.message)); return; }
+      const job = ocrToolState.workerJob;
+      if (!job || m.id !== job.id) return;             // a reply to a job nobody waits for
+      if (m.type === 'progress') { job.progress?.(m.pass, m.done, m.total); return; }
+      ocrToolState.workerJob = null;
+      if (m.type === 'result') job.resolve({ res: m.res, pass: m.pass });
+      else if (m.type === 'cancelled') job.resolve(null);
+      else job.reject(new Error(m.message));
+    };
+    w.postMessage({ type: 'init', scripts });
+  });
+  return ocrToolState.workerReady;
+}
+
+// one page through the worker → { res, pass } (slim), or null when cancelled.
+// The page buffer goes by structured clone: the main thread keeps its copy
+// (PageEngine caches it and the pixel view reads the same buffer).
+function ocrWorkerRead(w, page, opts) {
+  return new Promise((resolve, reject) => {
+    const id = ++ocrToolState.workerSeq;
+    ocrToolState.workerJob = { id, resolve, reject, progress: opts.progress };
+    w.postMessage({ type: 'read', id, w: page.w, h: page.h, gray: page.gray,
+      converted: page.converted || null, setUrls: opts.setUrls,
+      passHint: opts.passHint, carry: opts.carry });
+  });
+}
+
+// stop the current run: no further page starts, and the page in flight is
+// abandoned at its next band (the worker replies 'cancelled', no boxes)
+function ocrCancel() {
+  ocrToolState.cancel = true;
+  ocrToolState.worker?.postMessage({ type: 'cancel' });
 }
 
 // data-URL page raster -> loaded <img> (null when the page has no raster)
@@ -237,29 +323,9 @@ function ocrAddBoxes(pageNum, img, res, pass) {
 // recto smoke test uploads its certified document and must always exercise
 // the real engine.
 
-// The engine's live result references whole glyph sets; keep exactly the
-// fields ocrAddBoxes reads so a cached page replays through the same code
-// path as a live read.
-function ocrSlimResult(res) {
-  return {
-    lines: (res.lines || []).map(L => ({
-      text: L.text, font: L.font, baseline: L.baseline, top: L.top, bot: L.bot,
-      phy: L.phy ?? 0, clean: !!L.clean, residual: L.residual ?? 0,
-      fails: Array.from(L.fails || []),
-      boxes: (L.boxes || []).map(b => Array.from(b)),
-      set: L.set ? { maxAsc: L.set.maxAsc, maxDesc: L.set.maxDesc, sizePx: L.set.sizePx } : null,
-      entries: (L.entries || []).map(e => ({ i: e.i, pen: e.pen, adv: e.adv, ch: e.ch,
-        ...(e.src ? { src: e.src } : {}) })),          // src: which set of a union pool drew it
-    })),
-    spaceAdv: res.spaceAdv ?? null,                    // page-calibrated space (pixel view re-layout)
-    objects: (res.objects || []).filter(o => o.type === 'box')
-      .map(o => ({ type: o.type, x0: o.x0, y0: o.y0, x1: o.x1, y1: o.y1 })),
-  };
-}
-
-function ocrSlimPass(pass) {
-  return { tol: pass?.tol || 0, quant: !!pass?.quant, union: !!pass?.union };
-}
+// The slimming itself (ocrSlimResult / ocrSlimPass) lives in ocr-result.js:
+// the worker posts slim results, the cache stores them, and a live inline
+// read is slimmed here — one shape, one code path (ocrAddBoxes).
 
 async function ocrFetchCache(hash) {
   if (!hash) return null;
@@ -311,20 +377,36 @@ function ocrApplyCached(cached) {
     ' · precomputed');
 }
 
+// one page: { img, res, pass } — res slim when it came through the worker
+// (ocrAddBoxes reads the same fields either way) — or null when the page has
+// no raster or the read was cancelled. carry: null for a single page, the
+// run's { fresh } marker for Read-all-pages (cross-page baseline hints live
+// in the worker, per run; inline they live on this object).
 async function ocrReadOnePage(pageNum, label, carry) {
   const img = await ocrLoadPageImage(pageNum);
   if (!img) return null;
   ocrToolState.engine ??= new PageEngine();
   const page = BlindOCR.whitenColored(ocrToolState.engine._pageFor(img),
     ocrToolState.engine.pageRGBA(img));
-  const sets = await ocrLoadSets();
-  const { res, pass } = await BlindOCR.readPageAuto(page, sets, {
-    passHint: ocrToolState.passHint,
-    carry,      // Read-all-pages only: cross-page baseline hints (per run)
-    progress: (p, d, t) => setOcrStatus(`${label}${BlindOCR.passLabel(p)}: ${d}/${t} bands…`),
+  const progress = (p, d, t) => setOcrStatus(`${label}${BlindOCR.passLabel(p)}: ${d}/${t} bands…`);
+  const w = await ocrWorker().catch(e => {
+    console.warn('OCR: no worker, reading on the main thread —', e?.message || e);
+    return null;
   });
-  ocrToolState.passHint = pass;
-  return { img, res, pass };
+  let out;
+  ocrToolState.readVia = w ? 'worker' : 'inline';
+  if (w) {
+    const mode = !carry ? 'none' : carry.fresh ? 'new' : 'keep';
+    if (carry) carry.fresh = false;
+    out = await ocrWorkerRead(w, page, { setUrls: await ocrSetUrls(),
+      passHint: ocrToolState.passHint, carry: mode, progress });
+    if (!out) return null;                              // cancelled mid-page
+  } else {
+    const sets = await ocrLoadSets();
+    out = await BlindOCR.readPageAuto(page, sets, { passHint: ocrToolState.passHint, carry, progress });
+  }
+  ocrToolState.passHint = out.pass;
+  return { img, res: out.res, pass: out.pass };
 }
 
 function ocrSetButtons(running) {
@@ -353,7 +435,7 @@ async function ocrRun(allPages) {
     const totals = { lines: 0, clean: 0, unread: 0, boxes: 0 };
     // sequential whole-document read: pages share one hint carry (same as
     // char_training's blindOcrDocument); single-page reads stay stateless
-    const carry = allPages ? {} : null;
+    const carry = allPages ? { fresh: true } : null;
     // full reads of the startup document refresh the precomputed cache
     const runHash = state.docHash;
     const collected = (allPages && ocrToolState.isDefault && runHash) ? [] : null;
@@ -497,7 +579,7 @@ async function ocrAutoRead() {
   });
   document.getElementById('ocr-run-page')?.addEventListener('click', () => ocrRun(false));
   document.getElementById('ocr-run-all')?.addEventListener('click', () => ocrRun(true));
-  document.getElementById('ocr-cancel')?.addEventListener('click', () => { ocrToolState.cancel = true; });
+  document.getElementById('ocr-cancel')?.addEventListener('click', ocrCancel);
   // Show/hide the OCR text overlay globally — same pattern as text_tool's
   // toggle-embedded-text (body class + data-type CSS rule in styles.css).
   document.getElementById('ocr-toggle-text')?.addEventListener('click', () => {
@@ -512,7 +594,7 @@ async function ocrAutoRead() {
 PDFHooks.on('document:loaded', (e) => {
   ocrToolState.passHint = null;
   ocrToolState.engine = null;
-  ocrToolState.cancel = ocrToolState.running;
+  if (ocrToolState.running) ocrCancel();
   ocrToolState.autoDone = false;
   ocrToolState.isDefault = !!e?.isDefault;   // only the startup doc uses the cache
   setOcrStatus('idle');
@@ -520,4 +602,4 @@ PDFHooks.on('document:loaded', (e) => {
 });
 
 // Programmatic entry point (used by the headless smoke test).
-window.OCRTool = { run: ocrRun, autoRead: ocrAutoRead, chooseLayer: ocrChooseLayer, state: ocrToolState };
+window.OCRTool = { run: ocrRun, autoRead: ocrAutoRead, chooseLayer: ocrChooseLayer, cancel: ocrCancel, state: ocrToolState };

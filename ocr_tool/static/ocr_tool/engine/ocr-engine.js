@@ -742,7 +742,7 @@
       const idx = Array.from({ length: n }, (_, k) => k);
       const sc = idx.map(k => census.get(key(g, k)));
       idx.sort((a, b) => sc[a] - sc[b] || g.inkB[a] - g.inkB[b] || a - b);
-      const pick = (arr) => arr.constructor.from(idx, k => arr[k]);
+      const pick = (arr) => { const out = new arr.constructor(n); for (let i = 0; i < n; i++) out[i] = arr[idx[i]]; return out; };
       g.inkC = pick(g.inkC); g.inkR = pick(g.inkR); g.inkB = pick(g.inkB); g.inkA = pick(g.inkA);
     }
   }
@@ -762,8 +762,18 @@
     // whenever q(gb)+2·TOL < 160, and a page byte ≥ 160 (and not skip) at that
     // row makes tryCand reject for sure. Linear-law candidates keep d = 0:
     // their shift accumulation breaks the ≤-gb bound (no filter, no risk).
-    const colBits = (g, colRel) => {                   // [inkM0, inkM1, darkM0, darkM1]
-      let m0 = 0, m1 = 0, d0 = 0, d1 = 0;
+    // Three thresholds, same argument each: a candidate needing a byte under
+    // T at a row where the page is ≥ T (and not skip) is dead. 255 is the ink
+    // mask (the grouping key), 160 the dark mask — both on the first two
+    // columns — and 96 the STEM mask, taken on whichever column of the glyph
+    // has the most rows under 96 and tested at that column of the page. A
+    // glyph's first ink column is its lightest (antialiased edge), so the
+    // first two columns alone let ~57 trials per anchor through on a
+    // wrong-face page (measured 2026-09-03, 77 sets); its stem is dark in
+    // every face, and a stem at the wrong rows or depth kills the candidate
+    // before the trial.
+    const colBits = (g, colRel) => {                   // [m0, m1, d0, d1, k0, k1]
+      let m0 = 0, m1 = 0, d0 = 0, d1 = 0, k0 = 0, k1 = 0;
       const linG = g.lin ?? set.linear;
       for (let k = 0; k < g.inkC.length; k++) {
         if (g.inkC[k] !== g.inkLeft + colRel) continue;
@@ -771,14 +781,17 @@
         if (pred > 254 - 2 * TOL) continue;
         const bit = g.dy + g.inkR[k] + ASC;
         if (bit >= 0 && bit < span) {
-          if (bit < 32) m0 |= 1 << bit; else m1 |= 1 << (bit - 32);
-          if (!linG && pred < 160 - 2 * TOL) {
-            if (bit < 32) d0 |= 1 << bit; else d1 |= 1 << (bit - 32);
+          const b = bit < 32 ? 1 << bit : 1 << (bit - 32), hi = bit >= 32;
+          if (hi) m1 |= b; else m0 |= b;
+          if (!linG) {
+            if (pred < 160 - 2 * TOL) { if (hi) d1 |= b; else d0 |= b; }
+            if (pred < 96 - 2 * TOL) { if (hi) k1 |= b; else k0 |= b; }
           }
         }
       }
-      return [m0, m1, d0, d1];
+      return [m0, m1, d0, d1, k0, k1];
     };
+    const popcnt = (v) => { v = v - ((v >>> 1) & 0x55555555); v = (v & 0x33333333) + ((v >>> 2) & 0x33333333); return (((v + (v >>> 4)) & 0x0f0f0f0f) * 0x01010101) >>> 24; };
     const groups = new Map();
     // chain index (advance chaining): the same per-candidate column masks,
     // bucketed by ¼-px x-phase and then by dx+inkLeft — at a KNOWN pen only
@@ -788,10 +801,17 @@
     const byPhase = [[], [], [], []];
     for (const g of cands) {
       const [m0, m1, d00, d01] = colBits(g, 0), [n0, n1, d10, d11] = colBits(g, 1);
+      // stem column: the glyph column with the most rows predicted under 96
+      let sc = 0, s0 = 0, s1 = 0, sn = 0;
+      for (let c = 0; c < g.w - g.inkLeft; c++) {
+        const cb = colBits(g, c), pc = popcnt(cb[4]) + popcnt(cb[5]);
+        if (pc > sn) { sn = pc; sc = c; s0 = cb[4]; s1 = cb[5]; }
+      }
       // dark masks ride on the candidate record (per-phy records, restamped
       // whenever this index rebuilds for a new quant/tol config) — grouping
       // stays on the ink masks alone, so the dark check is per member
       g._d00 = d00; g._d01 = d01; g._d10 = d10; g._d11 = d11;
+      g._sc = sc; g._s0 = s0; g._s1 = s1;
       let grp = groups.get(m0 + ',' + m1);
       if (!grp) groups.set(m0 + ',' + m1, grp = { m0, m1, subs: new Map() });
       let sub = grp.subs.get(n0 + ',' + n1);
@@ -808,7 +828,40 @@
     });
     const list = [...groups.values()];
     for (const grp of list) grp.subs = [...grp.subs.values()];
-    return { groups: list, chain };
+    return { groups: list, flat: flatIndex(list), chain };
+  }
+
+  // The anchor index as flat typed arrays — the scanner's anchor loop walks
+  // groups, then a surviving group's subs, then a surviving sub's members,
+  // and touches a candidate OBJECT only once every mask has passed: on a
+  // wrong-face page that loop was a third of a pass in property loads.
+  //   gm[2i..]  group ink masks (col 0)     gs[2i..]  its sub range [a, b)
+  //   sn[2i..]  sub ink masks (col 1)       sm[2i..]  its member range [a, b)
+  //   md[4i..]  member dark masks (cols 0, 1)  ms[3i..]  stem column, stem masks
+  //   mc[i]     the candidate record
+  function flatIndex(groups) {
+    let ns = 0, nm = 0;
+    for (const grp of groups) { ns += grp.subs.length; for (const sub of grp.subs) nm += sub.members.length; }
+    const gm = new Int32Array(2 * groups.length), gs = new Int32Array(2 * groups.length);
+    const sn = new Int32Array(2 * ns), sm = new Int32Array(2 * ns);
+    const md = new Int32Array(4 * nm), ms = new Int32Array(3 * nm), mc = new Array(nm);
+    let si = 0, mi = 0;
+    groups.forEach((grp, gi) => {
+      gm[2 * gi] = grp.m0; gm[2 * gi + 1] = grp.m1;
+      gs[2 * gi] = si;
+      for (const sub of grp.subs) {
+        sn[2 * si] = sub.n0; sn[2 * si + 1] = sub.n1;
+        sm[2 * si] = mi;
+        for (const g of sub.members) {
+          md[4 * mi] = g._d00 | 0; md[4 * mi + 1] = g._d01 | 0; md[4 * mi + 2] = g._d10 | 0; md[4 * mi + 3] = g._d11 | 0;
+          ms[3 * mi] = g._sc | 0; ms[3 * mi + 1] = g._s0 | 0; ms[3 * mi + 2] = g._s1 | 0;
+          mc[mi] = g; mi++;
+        }
+        sm[2 * si + 1] = mi; si++;
+      }
+      gs[2 * gi + 1] = si;
+    });
+    return { gm, gs, sn, sm, md, ms, mc, ng: groups.length };
   }
 
   // chained-pen probes: the exact advance and its ¼-px snap neighbours. The
@@ -816,6 +869,16 @@
   // layout bias δ ∈ [0, 1/32 px] — under one quarter, so ±1 covers all of it
   // (all probes accumulate before judging; order does not matter)
   const CHAIN_PROBES = [0, -1, 1];
+
+  // the fail flood's stack (scanLine): one typed buffer per module, grown on
+  // demand — a pixel can be pushed once per neighbour before it is visited
+  let flStack = new Int32Array(1 << 12);
+  const growStack = (st) => { const n = new Int32Array(st.length * 2); n.set(st); return n; };
+  // probe window scratch (scanLine): canvas / skip / edge planes, the flood's
+  // visited map with its running generation stamp, and small per-scan arrays
+  let scratch = { n: 0 }, scratchUnexpl = new Int32Array(0), flVisBuf = new Int32Array(0), flVisGen = 0;
+  const scratchCol = { ink: new Int16Array(256), open: new Int16Array(256) }, scratchMk = new Int32Array(16);
+  let stemBuf = new Int32Array(0), stemGen = 0;   // per-column deep masks (scanLine stemMask), stamped with a module-wide generation
 
   // debug envs (Node/CLI only — inert in the browser, where `process` is
   // undefined): BR_DEBUG=1 (fail pixels), BR_LINE=<baseline> (accept trace),
@@ -874,23 +937,31 @@
     const bw = xTo - xFrom, bh = y1 - y0;
     if (bw <= 0 || bh <= 0)
       return { glyphs: [], fails: [], frags: [], residual: 0, canvas: null, y0, y1, xFrom, xTo };
-    const canvas = new Uint8Array(bw * bh).fill(255);
-    const shifts = lin ? new Uint8Array(bw * bh) : null;   // producer +1 count per pixel
+    // Probes (finite maxGlyphs) run hundreds of thousands of times per page and
+    // nobody reads their canvas back, so their window arrays come from one
+    // module-level scratch (allocation and zeroing were 10% of a wrong-face
+    // pass); final scans keep their own — readPage keeps L.canvas.
+    const pooled = maxGlyphs !== Infinity;
+    const n = bw * bh;
+    if (pooled && scratch.n < n) scratch = { n: n * 2, canvas: new Uint8Array(n * 2), skip: new Uint8Array(n * 2),
+      isEdge: new Uint8Array(n * 2), isEdgeV: new Uint8Array(n * 2), shifts: new Uint8Array(n * 2) };
+    const canvas = pooled ? scratch.canvas.fill(255, 0, n) : new Uint8Array(n).fill(255);
+    const shifts = lin ? (pooled ? scratch.shifts.fill(0, 0, n) : new Uint8Array(n)) : null;   // producer +1 count per pixel
     // skip = window-local don't-care overlay: object mask pixels PLUS
     // absorbed-fail pixels (canvas=page alone poisons any LATER candidate
     // overlapping the blob — its pixels then compare against composite math —
     // so a word whose head fell into unexplainable residue could never read
     // from its intact tail). One combined array keeps the candidate hot loop
     // at a single load.
-    const skip = new Uint8Array(bw * bh);   // 1 explained by another line / tol dust,
+    const skip = pooled ? scratch.skip.fill(0, 0, n) : new Uint8Array(n);   // 1 explained by another line / tol dust,
                                             // 2 fail-absorbed, 3 box BODY (destroyed ink)
     // bar EDGE cells (detectObjects' EDGE MODEL): not skipped — the canvas
     // holds the edge's own byte as prior ink, so a glyph under it is judged on
     // the composite it must leave there
-    const isEdge = new Uint8Array(bw * bh);
-    const isEdgeV = new Uint8Array(bw * bh);   // column-edge cells: where a SHADOW anchor may sit
+    const isEdge = pooled ? scratch.isEdge.fill(0, 0, n) : new Uint8Array(n);
+    const isEdgeV = pooled ? scratch.isEdgeV.fill(0, 0, n) : new Uint8Array(n);   // column-edge cells: where a SHADOW anchor may sit
     const edgeMap = mask._edge ?? null, edgeVMap = mask._edgeV ?? null;
-    const colInk = new Int16Array(256), colOpen = new Int16Array(256);   // tryCand scratch, per glyph column
+    const colInk = scratchCol.ink, colOpen = scratchCol.open;   // tryCand scratch, per glyph column (zeroed where used)
     const pageAt = (x, y) => page.gray[y * W + x];
     const masked = (x, y) => skip[(y - y0) * bw + (x - xFrom)];
     const canAt = (x, y) => canvas[(y - y0) * bw + (x - xFrom)];
@@ -910,6 +981,21 @@
     // deliberately read and explained through. Accepted glyphs still blend
     // and explain ink beyond cBot — only unexplained-ink JUDGING stops there.
     const cBot = bandBot === null || bandBot === undefined ? y1 : Math.min(y1, Math.max(bandBot, cTop));
+    // Flood cache (opts.floodCache, probes only): until a scan accepts its first
+    // glyph, everything it does is independent of the glyph set — the anchor
+    // column, the fail flood, the absorbed pixels, the dust rule — because
+    // canvas, skip and edge cells over the judged rows [cTop, cBot) are the
+    // page's, not the set's. readPage probes every set × phase × baseline of
+    // a band against the same page state, so the k-th fail (or dust) step of
+    // a zero-accept scan with the same (cTop, cBot, xFrom, xTo) is the same
+    // flood: cache the component per key and step and replay it. The step's
+    // anchor column is checked on replay; any mismatch drops to the live
+    // flood. The first accept ends the replay for that scan. (Measured on an
+    // unreadable page with 77 sets: 470 k floods per pass, 8 per probe — the
+    // probe walks a wrong word three columns at a time, re-flooding the rest.)
+    const fc = opts && opts.floodCache && maxGlyphs !== Infinity ? opts.floodCache : null;
+    let fcLive = fc !== null, fcSteps = null, fcK = 0;
+    if (fc) { const key = cTop + '|' + cBot + '|' + xFrom + '|' + xTo; fcSteps = fc.get(key); if (!fcSteps) fc.set(key, fcSteps = []); }
     // Fused init: don't-care pre-absorb (object-mask pixels AND pixels another
     // line's scan already explained — a neighbouring line's descender/ascender
     // ink inside this window; at small line pitches adjacent lines' row ranges
@@ -924,7 +1010,7 @@
     // bytes are palette FIXPOINTS (quantMap's available set is read off the
     // page itself), so they can only count as unexplained under a foreign
     // QUANT — kept exact via the explicit QUANT[pv] check.
-    const unexpl = new Int32Array(bw);
+    const unexpl = pooled ? (scratchUnexpl.length < bw ? (scratchUnexpl = new Int32Array(bw * 2)) : scratchUnexpl.fill(0, 0, bw)) : new Int32Array(bw);
     {
       const g = page.gray, mRows = mask._rows, eRows = explained ? explained._rows : null;
       const q255 = QUANT ? QUANT[255] : 255;
@@ -993,6 +1079,7 @@
     const grpList = idx?.groups ??
       (cands.forEach((g, i) => { g._i = i; }),
         cands.length ? [{ m0: 0, m1: 0, subs: [{ n0: 0, n1: 0, members: cands }] }] : []);
+    const flat = idx?.flat ?? flatIndex(grpList);   // typed-array walk of the same index (see flatIndex)
     const chain = idx?.chain ?? null;      // per-phase index for advance chaining
     const ASC = set.maxAsc, baseTop = baseline - ASC;  // unclamped window top: mask bit = y - baseTop
     let pm0 = 0, pm1 = 0, pq0 = 0, pq1 = 0;            // page-side ink + dark masks of the last colMask(x)
@@ -1012,6 +1099,24 @@
         }
       }
     };
+    // deep mask (< 96, skip rows ok) of page column x, for the stem test —
+    // cached per anchor (skip only changes between anchors), one entry per
+    // window column: gen-stamped so nothing is cleared
+    let sk0 = 0, sk1 = 0;
+    if (stemBuf.length < 3 * bw) stemBuf = new Int32Array(3 * bw * 2);
+    const stemMask = (x) => {
+      const i = 3 * (x - xFrom);
+      if (stemBuf[i] === stemGen) { sk0 = stemBuf[i + 1]; sk1 = stemBuf[i + 2]; return; }
+      sk0 = 0; sk1 = 0;
+      for (let y = y0; y < y1; y++) {
+        const v = page.gray[y * W + x];
+        if (v < 96 || skip[(y - y0) * bw + (x - xFrom)]) {
+          const bit = y - baseTop;
+          if (bit < 32) sk0 |= 1 << bit; else if (bit < 64) sk1 |= 1 << (bit - 32);
+        }
+      }
+      stemBuf[i] = stemGen; stemBuf[i + 1] = sk0; stemBuf[i + 2] = sk1;
+    };
 
     // one candidate trial: glyph g at integer pen pi must explain the page
     // bytes through the blend law, with the anchor column inside its bbox.
@@ -1026,18 +1131,15 @@
       const linG = g.lin ?? lin;
       const { inkC, inkR, inkB, inkA } = g, nInk = inkC.length;
       const rowBase = gy * W + gx, canBase = (gy - y0) * bw + (gx - xFrom);
-      for (let c = 0; c < g.w; c++) { colInk[c] = 0; colOpen[c] = 0; }
       let anchorHit = 0, overlap = 0, edgeN = 0;
       const anchorRel = col - gx;
       for (let k = 0; k < nInk; k++) {
         const cc = inkC[k], rr = inkR[k];
         const pOff = rowBase + rr * W + cc;
         const ci = canBase + rr * bw + cc, sk = skip[ci];
-        colInk[cc]++;
         if (sk) { skipped++; if (sk !== 3) foreign = true; continue; }  // object/absorbed pixel: no evidence either way
         if (isEdge[ci]) edgeN++;
         else if (canvas[ci] === 0) overlap++;            // composite over black: any glyph passes, no evidence
-        else colOpen[cc]++;
         const gb = inkB[k], pv = page.gray[pOff], cv = canvas[canBase + rr * bw + cc];
         // fresh-canvas fast path (the overwhelmingly common case, non-linear
         // law): blending the glyph's alpha over white reproduces gb by
@@ -1133,7 +1235,15 @@
         // anchor (an edge column whose composite nothing explained, see the
         // main loop): then the shadow alone may carry it, still only when
         // exact everywhere and unique in the pool.
+        // per column: ink pixels vs OPEN ones (not skip, not edge, not over
+        // black) — counted here, on the rare clipped path, not per trial
         let leaks = false;
+        for (let c = 0; c < g.w; c++) { colInk[c] = 0; colOpen[c] = 0; }
+        for (let k = 0; k < nInk; k++) {
+          const cc = inkC[k], ci = canBase + inkR[k] * bw + cc;
+          colInk[cc]++;
+          if (!skip[ci] && !isEdge[ci] && canvas[ci] !== 0) colOpen[cc]++;
+        }
         for (let c = 0; c < g.w && !leaks; c++) if (colInk[c] && colOpen[c] === colInk[c]) leaks = true;
         if (!leaks && !shadowAnchor) return null;
         // a shadow-only fit rests on one column: under 3 deviating pixels it
@@ -1192,11 +1302,11 @@
     // pages with no fails never pay.
     let revive = null;
     let failGuard = -1;                     // right edge of the last failed blob
-    let flVis = null, flGen = 0;            // flood visited map (lazy, generation-stamped)
+    let flVis = null, flGen = 0;            // flood visited map (module scratch, generation-stamped)
     const accepted = new Set();                          // "ch@pen" — never re-accept
     let cursor = xFrom, shadowCursor = xFrom;
     let chainPenQ = null;                   // expected next pen (¼-px units) after an accept
-    const mk = new Int32Array(16);          // chain-probe column masks, cols col-2..col+1
+    const mk = scratchMk;                   // chain-probe column masks, cols col-2..col+1
                                             // (4 ints per column: ink m0/m1, dark q0/q1)
     while (glyphs.length < maxGlyphs) {
       let col = nextUnexplained(cursor);
@@ -1261,6 +1371,7 @@
       }
       // candidates whose first ink column lands on col (or col-1/-2: composite
       // columns can hide the true left edge when bytes saturate)
+      stemGen++;                             // new anchor (and new scan): skip may have changed, the window may differ
       if (!best)
       for (let back = 0; back <= 2; back++) {
         if (col - back < xFrom) break;                 // every candidate's bbox starts left of the window
@@ -1268,13 +1379,26 @@
         const a0 = pm0, a1 = pm1, aq0 = pq0, aq1 = pq1;
         let b0 = -1, b1 = -1, bq0 = -1, bq1 = -1;      // second column; all-ones when outside the window
         if (col - back + 1 < xTo) { colMask(col - back + 1); b0 = pm0; b1 = pm1; bq0 = pq0; bq1 = pq1; }
-        for (const grp of grpList) {
-        if ((grp.m0 & ~a0) | (grp.m1 & ~a1)) continue;     // group needs ink where the page is white
-        for (const sub of grp.subs) {
-        if ((sub.n0 & ~b0) | (sub.n1 & ~b1)) continue;
-        for (const g of sub.members) {
+        const cb = col - back;
+        const { gm, gs, sn, sm, md, ms, mc, ng } = flat;
+        for (let gi = 0; gi < ng; gi++) {
+        if ((gm[2 * gi] & ~a0) | (gm[2 * gi + 1] & ~a1)) continue;     // group needs ink where the page is white
+        for (let si = gs[2 * gi], se = gs[2 * gi + 1]; si < se; si++) {
+        if ((sn[2 * si] & ~b0) | (sn[2 * si + 1] & ~b1)) continue;
+        for (let mi = sm[2 * si], me = sm[2 * si + 1]; mi < me; mi++) {
           // dark prefilter (see anchorGroups): needs dark where the page never is
-          if ((g._d00 & ~aq0) | (g._d01 & ~aq1) | (g._d10 & ~bq0) | (g._d11 & ~bq1)) continue;
+          if ((md[4 * mi] & ~aq0) | (md[4 * mi + 1] & ~aq1) | (md[4 * mi + 2] & ~bq0) | (md[4 * mi + 3] & ~bq1)) continue;
+          // stem prefilter: the glyph's darkest column against the page column
+          // it would land on (a column past the window fails tryCand's bbox
+          // test anyway — the same verdict, before the trial)
+          const s0 = ms[3 * mi + 1], s1 = ms[3 * mi + 2];
+          if (s0 | s1) {
+            const sx = cb + ms[3 * mi];
+            if (sx >= xTo) continue;
+            stemMask(sx);
+            if ((s0 & ~sk0) | (s1 & ~sk1)) continue;
+          }
+          const g = mc[mi];
           const r = tryCand(g, col - back - g.dx - g.inkLeft, col);  // pen puts first ink col at col-back
           if (!r) continue;
           if (r.clipped) { clipped.push(r); continue; }
@@ -1337,6 +1461,12 @@
             return false;
           });
           if (okDust) {
+            if (fcLive) {                         // a dust step, for the flood cache's step count
+              const st = fcSteps[fcK];
+              if (st === undefined) { fcSteps[fcK] = { kind: 2, col }; fcK++; }
+              else if (st.kind === 2 && st.col === col) fcK++;
+              else fcLive = false;
+            }
             for (const [x, y] of px) {
               setCan(x, y, pageAt(x, y));
               // same retire rule as the fail-absorb: a non-fixpoint dust
@@ -1372,28 +1502,57 @@
         // window — the old per-fail Set of packed keys dominated wrong-hypothesis
         // scans, where every ink column of a long unmatched blob fails in turn
         // and re-floods the component's survivors)
-        let compRight = col;
-        if (flVis === null) flVis = new Int32Array(bw * bh);
-        flGen++;
-        const comp = [], stack = [];
-        for (let y = cTop; y < cBot; y++)
-          if (pageAt(col, y) !== q(canAt(col, y)) && !masked(col, y) && !isEdge[(y - y0) * bw + (col - xFrom)]) stack.push(col << 16 | y);
-        while (stack.length) {
-          const k = stack.pop();
-          const px = k >> 16, py = k & 0xffff;
-          const ci = (py - y0) * bw + (px - xFrom);
-          if (flVis[ci] === flGen) continue;
-          flVis[ci] = flGen;
-          comp.push(k);
-          if (px > compRight) compRight = px;
-          for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-            const nx = px + dx, ny = py + dy;
-            if (nx < xFrom || nx >= xTo || ny < cTop || ny >= cBot ||
-                flVis[(ny - y0) * bw + (nx - xFrom)] === flGen) continue;
-            if (pageAt(nx, ny) < 255 && !masked(nx, ny) && !isEdge[(ny - y0) * bw + (nx - xFrom)] &&
-                pageAt(nx, ny) !== q(canAt(nx, ny)))
-              stack.push(nx << 16 | ny);
+        let compRight = col, comp = null;
+        if (fcLive) {
+          const st = fcSteps[fcK];
+          if (st === undefined) { /* computed below, then recorded */ }
+          else if (st.kind === 1 && st.col === col) { comp = st.comp; compRight = st.right; fcK++; }
+          else fcLive = false;
+        }
+        if (comp === null) {
+          if (flVis === null) {
+            if (flVisBuf.length < n) { flVisBuf = new Int32Array(n * 2); flVisGen = 0; }   // fresh zeros: restart stamps
+            flVis = flVisBuf;
           }
+          flGen = ++flVisGen;                    // unique across scans: stale stamps never match
+          comp = [];
+          // the same DFS (seed order, neighbour order, pop order) on window-local
+          // indices with a typed stack: the accessor closures cost more than the
+          // pixels did
+          const g = page.gray;
+          let stack = flStack, sp = 0;
+          for (let y = cTop, ci = (cTop - y0) * bw + (col - xFrom); y < cBot; y++, ci += bw) {
+            const cv = canvas[ci];
+            if (g[y * W + col] !== (QUANT ? QUANT[cv] : cv) && !skip[ci] && !isEdge[ci]) {
+              if (sp === stack.length) flStack = stack = growStack(stack);
+              stack[sp++] = col << 16 | y;
+            }
+          }
+          while (sp > 0) {
+            const k = stack[--sp];
+            const px = k >> 16, py = k & 0xffff;
+            const ci = (py - y0) * bw + (px - xFrom);
+            if (flVis[ci] === flGen) continue;
+            flVis[ci] = flGen;
+            comp.push(k);
+            if (px > compRight) compRight = px;
+            const dyLo = py - 1 < cTop ? 0 : -1, dyHi = py + 1 >= cBot ? 0 : 1;
+            const dxLo = px - 1 < xFrom ? 0 : -1, dxHi = px + 1 >= xTo ? 0 : 1;
+            for (let dy = dyLo; dy <= dyHi; dy++) {
+              const nrow = (py + dy) * W + px, nci0 = ci + dy * bw;
+              for (let dx = dxLo; dx <= dxHi; dx++) {
+                const nci = nci0 + dx;
+                if (flVis[nci] === flGen) continue;
+                const pv = g[nrow + dx];
+                if (pv >= 255 || skip[nci] || isEdge[nci]) continue;
+                const cv = canvas[nci];
+                if (pv === (QUANT ? QUANT[cv] : cv)) continue;
+                if (sp === stack.length) flStack = stack = growStack(stack);
+                stack[sp++] = (px + dx) << 16 | (py + dy);
+              }
+            }
+          }
+          if (fcLive) { fcSteps[fcK] = { kind: 1, col, comp, right: compRight }; fcK++; }
         }
         for (const k of comp) {
           const px = k >> 16, py = k & 0xffff;
@@ -1440,6 +1599,7 @@
       // value; pending pixels take the glyph-over-canvas prediction so the next
       // glyph composites against it
       const { g, pi, gx, gy } = best;
+      fcLive = false;                          // state is the set's own from here on
       for (const p of g.ink) {
         const rr = (p / g.w) | 0, cc = p % g.w;
         const x = gx + cc, y = gy + rr;
@@ -1662,6 +1822,7 @@
     const work = bands.map(([top, bot]) => ({ top, bot, pick: null }));
     for (let wi = 0; wi < work.length; wi++) {
       const { top, bot } = work[wi];
+      scanOpts.floodCache = new Map();      // probes of THIS band share their fail floods (scanLine)
       // split-created upper segments clamp unexplained-ink judging at the
       // split boundary (their bot): ink there is the NEXT segment's to judge
       const clampBot = work[wi].clamp ? bot : null;

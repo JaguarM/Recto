@@ -23,8 +23,8 @@ The choice just flips the existing body classes (`hide-ocr-text` /
 `hide-embedded-text`) **and** both toolbar toggle buttons' active state, so
 manual toggling afterwards starts from a state that matches the screen; the
 verdict is appended to the status line. Loading a new document mid-run
-cancels the old run before the new auto read starts. Manual runs never flip
-layers.
+cancels the old run (the page in flight is abandoned at its next band)
+before the new auto read starts. Manual runs never flip layers.
 
 This matters for scanned/eDiscovery documents: their pages are images, so the
 embedded-text extractor has nothing to read. The blind reader recovers the
@@ -77,11 +77,27 @@ here.** The workflow:
    boxes. (`npm run sync:recto -- --check` reports staleness without writing.)
 
 Only `ocr-tool.js` (the adapter: UI wiring, page-raster → engine buffer,
-lines → UnifiedTextBoxes) and `pixel-view.js` (the MuPDF pixel view) are
-owned by this app and edited here.
+lines → UnifiedTextBoxes), `ocr-worker.js` (the Worker the adapter reads
+in), `ocr-result.js` (the slim result shape shared by the worker, the cache
+and `ocrAddBoxes`) and `pixel-view.js` (the MuPDF pixel view) are owned by
+this app and edited here.
 
 ## How it reads
 
+- **Off the main thread.** The engine is synchronous JavaScript that yields
+  only between bands, and a page in a face the sets do not carry runs the
+  whole tolerance ladder — tens of seconds with the full bundle. The adapter
+  therefore builds the page buffer (canvas → gray, colour whitening — that
+  part needs the DOM) and posts it to a dedicated Worker, `ocr-worker.js`,
+  which imports the same engine scripts the page loaded (their cache-busted
+  URLs, so it can never run a stale copy), loads the glyph bundle once, and
+  returns the **slim** result (`ocr-result.js`) — the shape the precomputed
+  cache stores, replayed through the same `ocrAddBoxes`. Zooming, page
+  changes and editing stay live while a read runs. The main thread loads the
+  glyph sets only for the pixel view, or to read inline in a browser without
+  Workers (the fallback, same results). **Stop** cancels between bands: the
+  page in progress is abandoned (no boxes for it), earlier pages keep theirs;
+  loading another document does the same before its own auto read starts.
 - Input pixels are `state.pageImages` — the server-extracted, ratio-cropped
   page rasters the viewer displays, so OCR coordinates line up with the page
   by construction. Coordinates scale into the 816×1056 viewBox space

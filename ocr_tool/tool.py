@@ -13,8 +13,10 @@ class OcrTool(PDFTool):
     the tol0 repo by its ``tools/sync-recto.mjs`` (``npm run sync:recto``
     there) — never edit them here; edit in tol0, re-certify (``npm test``,
     ``npm run certify:ftclone``, ``npm run certify:render``), re-sync. Only
-    ocr-tool.js (the OCR adapter), pixel-view.js (the pixel view adapter) and
-    the cache endpoint are owned by this app.
+    ocr-tool.js (the OCR adapter), ocr-worker.js (its Worker: the reader off
+    the main thread), ocr-result.js (the slim result shape both threads and
+    the cache share), pixel-view.js (the pixel view adapter) and the cache
+    endpoint are owned by this app.
     """
     name = 'ocr_tool'
     url_module = 'ocr_tool.urls'
@@ -25,10 +27,12 @@ class OcrTool(PDFTool):
         # engine files (synced — versions rewritten by sync-recto.mjs)
         {'path': 'ocr_tool/engine/core.js', 'version': 'v=ab4d2193'},
         {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=b95cb058'},
-        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=15a51a36'},
-        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=370b70e7'},
+        {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=d644c315'},
+        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=960ed79b'},
         {'path': 'ocr_tool/engine/render.js', 'version': 'v=ac6d0d86'},
-        # the adapters (Recto-owned)
-        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=7'},
+        # the adapters (Recto-owned). ocr-result.js is shared with the reader's
+        # Worker (ocr-worker.js, fetched by url from ocr-tool.js — not a page script)
+        {'path': 'ocr_tool/ocr-result.js', 'version': 'v=2'},
+        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=8'},
         {'path': 'ocr_tool/pixel-view.js', 'version': 'v=2'},
     ]

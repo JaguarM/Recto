@@ -271,7 +271,8 @@
   }
 
   // Run the ladder on one page: { res, pass } — the fewest-failures read at
-  // the earliest pass. opts: { passHint, carry, progress(pass, done, total) }.
+  // the earliest pass. opts: { passHint, carry, progress(pass, done, total),
+  // onPass(pass, res, ms) — called after every rung that ran (tools/ladder-bench.mjs times the ladder with it) }.
   // A document's producer doesn't change page to page — pass the previous
   // page's winning pass back in as passHint to try it first. opts.carry is a
   // caller-owned per-DOCUMENT object for sequential whole-document reads
@@ -297,9 +298,11 @@
       if (pass.tol > 2 && best && best.glyphs > 0) continue;   // the last resort only when nothing read
       let carry = doc?.passes.get(key(pass));
       if (doc && !carry) doc.passes.set(key(pass), carry = {});
+      const t0 = Date.now();
       const r = await readPage(page, sets, { tol: pass.tol,
         quant: pass.quant, union: pass.union, carry,
         progress: opts?.progress && ((d, t) => opts.progress(pass, d, t)) });
+      if (opts?.onPass) opts.onPass(pass, r, Date.now() - t0);
       const fails = r.lines.reduce((s, L) => s + L.fails.length, 0) +
         r.lines.filter(L => !L.set && !L.fragOnly).length;
       const glyphs = r.lines.reduce((s, L) => s + L.glyphs.length, 0);
