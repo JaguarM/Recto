@@ -13,7 +13,10 @@ detect bars — it matches against whatever `redaction` boxes exist (from
 Each redaction box carries its own `nameSettings` (a copy of the template
 edited while no box is selected): *Generate* full name / first only / last only,
 *Include* prefix / suffix / nickname, *Expand aliases* (every first / last
-spelling a person has), and a *starts with* / *ends with* letter filter (one
+spelling a person has — **on by default**: the memos write `Lex Wexner` and
+`Adriana Mucinska`, second aliases in the list, and a name the list holds but
+never generates is a bar the page pixels are never asked about), and a
+*starts with* / *ends with* letter filter (one
 or more letters, case-insensitive, applied to the rendered candidate string). A
 refiner that finds a letter of the hidden name sticking out of the bar fills
 the filter for that box through the `redaction:refined` event, unless the user
@@ -25,7 +28,19 @@ face, size and style** — a detected bar adopts them from the text line it is
 connected to (`embedded_text_viewer`'s connect step prefers a reader-read
 line, whose size is measured from the glyphs, over the embedded layer's) —
 resolved through the font catalogue (`family` / `bold` / `italic`), with the
-bar's kerning, uppercase and space-width settings applied.
+bar's kerning, uppercase and space-width settings applied, and **without
+ligatures** (`ligatures: false`): a producer that set none — Word, by default
+— laid `Groff` at f + f, and HarfBuzz's `ff` / `tt` ligatures would put such
+a name half a pixel short of its bar, outside the pen lattice (*Lesley Groff*
+and *Richard Barnett* on the memo).
+
+When a reader has read the bar's row, the optional seam
+**`window.ocrMeasureWidths(box, strings)`** (`ocr_tool`, over the reader's
+glyph set) lays the strings out in the face that actually drew the page, and
+those widths replace the HarfBuzz ones; the row's tolerance note names the set
+(`· calibri102mid_1024`). A string the set cannot draw keeps its HarfBuzz
+width. The two agree to the font unit on the memos; they differ where a
+document was set in another build of the face (tol0 LAWS §6).
 
 ## Which names fit
 
@@ -53,10 +68,11 @@ the bar selected.
 **Near misses.** Names the pen lattice excludes but the pixel tolerance admits
 are not thrown away. With a hypothesis tester present they are scored too, and
 one the page **could not contradict** joins the list (dotted chip, the title
-says so) — width ranks, the page decides. On the reference page *RICHARD
-BARNETT* measures 0.51 px short of its pen-exact bar and is consistent.
-Without a tester they are the fallback when nothing fits at all, shown under a
-red *No name fits the pen-exact width* note as near misses, never as fits.
+says so) — width ranks, the page decides. That is what kept *Richard Barnett*
+in view while HarfBuzz still formed the `tt` ligature that put it 0.51 px
+short of its pen-exact bar. Without a tester they are the fallback when
+nothing fits at all, shown under a red *No name fits the pen-exact width* note
+as near misses, never as fits.
 
 ## Page-pixel verdicts
 
@@ -107,7 +123,8 @@ pair, because no person's last name is 22 px wide.)
 - Listens to **`redaction:refined`** (remnant letters → letter filter).
 - Reads **`box.refineInfo`** (`exact`, `left` / `right`, `blocked`) when a
   refiner wrote it; without one every bar is a raster bar with detector edges.
-- Calls **`window.ocrTestHypothesis`** when defined; **`getNaturalSpaceWidth`**,
+- Calls **`window.ocrTestHypothesis`** and **`window.ocrMeasureWidths`** when
+  defined; **`getNaturalSpaceWidth`**,
   **`renderBox`**, **`GEO`**, **`selectBoxInSVG`** / **`syncToolbarToBox`**
   through guards.
 - Globals it exposes: `getBoxMatchInfo`, `getBoxMatches`, `fitRange`,
@@ -130,7 +147,7 @@ the halves, pinning both bars, halves judged separately).
 ```
 redaction_matching ──utbState / renderBox / GEO / getNaturalSpaceWidth──> text_tool ──> pdf_core
                    ──'redaction:refined', box.refineInfo (optional)─────> a refiner
-                   ──window.ocrTestHypothesis (optional)────────────────> a hypothesis tester
+                   ──window.ocrTestHypothesis, ocrMeasureWidths (optional)─> a reader (ocr_tool)
 ```
 
 Removing it: delete `redaction_matching/` and this docs folder, and drop its

@@ -314,6 +314,16 @@ session builds, in order, and the contract it plugs into:
 5. **`tools/verify-redactions.mjs`** — *Design §4*; assert the reference page
    (bar 2 unique, bar 1 six-way `no-evidence`).
 
+*Widths, settled 2026-09-05:* the names that "fell outside the matcher's
+width windows" on the memo (Lesley Groff, Richard Barnett at 0.51 px short)
+were HarfBuzz forming Calibri's `ff` / `tt` ligatures, not another build of
+the face — the archive's Calibri 5.75 and 5.87 carry the installed 6.11's
+advances. `/widths` now takes `ligatures: false` (the matcher and the refiner
+send it), and `ocr_tool` offers `window.ocrMeasureWidths`, the reader's set
+laid out plain with the refiner's space, which the matcher prefers; the two
+agree to the font unit. Lex Wexner and Adriana Mucinska were never generated
+(second aliases) — alias expansion is on by default now.
+
 Two inputs the refiner now supplies that the seam's own estimate does not
 know (EFTA00038617, Calibri, 2026-09-05): a bar that opens a sentence on a
 page that double-spaces its sentences starts **two** spaces after the period

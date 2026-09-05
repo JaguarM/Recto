@@ -26,8 +26,12 @@
         generateLastOnly: false,
         includePrefix: false,
         includeSuffix: false,
-        expandFirstAliases: false,
-        expandLastAliases: false,
+        // Every spelling a person has, by default: the memos write "Lex
+        // Wexner" and "Adriana Mucinska", second aliases in the list, and a
+        // name the list holds but never generates is a bar the page pixels
+        // are never asked about.
+        expandFirstAliases: true,
+        expandLastAliases: true,
         includeNickname: false,
         startsWith: '',
         endsWith: '',
@@ -588,7 +592,13 @@
       // space glyph and a multi-word candidate adds up to the full box width.
       const manualSpace = box.spaceWidth != null && box.defaultSpaceWidth === false;
 
+      // letter-spacing (rare on redactions) adds a fixed advance between
+      // every pair of glyphs; the shaper doesn't model it, so fold it in.
+      const lsPx = box.letterSpacing ? box.letterSpacing * GEO.docPtToPx(box.sizePt) : 0;
+      const spaced = (c, w) => lsPx ? w + lsPx * Math.max(0, (box.uppercase ? c.toUpperCase() : c).length - 1) : w;
+
       box.widths = {};
+      box.widthFace = null;
       try {
         const resp = await fetch('/widths', {
           method: 'POST',
@@ -602,6 +612,11 @@
             italic: !!box.italic,
             size, scale,
             kerning: box.kerning,
+            // Plain advances: a producer that set no ligatures (Word, by
+            // default) laid "Groff" at f + f, and HarfBuzz's ff/tt ligatures
+            // would put such a name half a pixel short of its bar — outside
+            // the pen lattice. The reader's set (below) is plain too.
+            ligatures: false,
             force_uppercase: box.uppercase,
             space_width: manualSpace ? box.spaceWidth : null,
           }),
@@ -609,20 +624,29 @@
         if (resp.ok) {
           const data = await resp.json();
           const results = data.results || [];
-          // letter-spacing (rare on redactions) adds a fixed advance between
-          // every pair of glyphs; the shaper doesn't model it, so fold it in.
-          const lsPx = box.letterSpacing ? box.letterSpacing * GEO.docPtToPx(box.sizePt) : 0;
-          strings.forEach((c, i) => {
-            let w = results[i]?.width ?? 0;
-            if (lsPx) {
-              const disp = box.uppercase ? c.toUpperCase() : c;
-              w += lsPx * Math.max(0, disp.length - 1);
-            }
-            box.widths[c] = w;
-          });
+          strings.forEach((c, i) => { box.widths[c] = spaced(c, results[i]?.width ?? 0); });
         }
       } catch (e) {
         console.warn('[redaction_matching] candidate width fetch failed', e);
+      }
+
+      // The page's own face, when a reader has read the row: an optional
+      // provider (ocr_tool over the reader's glyph set) lays the strings out
+      // in the face that actually drew the page — the same advances when it
+      // is the installed build, the producer's when it is another (LAWS §6:
+      // a 2008 Times draws the current outlines at other advances). A string
+      // the set cannot draw keeps its HarfBuzz width; without a provider
+      // nothing changes.
+      if (typeof ocrMeasureWidths === 'function') {
+        try {
+          const r = await ocrMeasureWidths(box, strings);
+          if (r && Array.isArray(r.widths)) {
+            strings.forEach((c, i) => { if (r.widths[i] != null) box.widths[c] = spaced(c, r.widths[i]); });
+            box.widthFace = r.face || null;
+          }
+        } catch (e) {
+          console.warn('[redaction_matching] page-face widths failed', e);
+        }
       }
 
       await scoreMatches(box);
@@ -973,9 +997,10 @@
       // Names the pen lattice excludes but the pixel tolerance admits. With a
       // hypothesis tester they are scored too, and one the page could not
       // contradict joins the list — width ranks, the page decides (a bar's
-      // pens can slip a lattice step: RICHARD BARNETT measures 0.51 px short
-      // of its bar on the reference page and is consistent). Without a
-      // tester they are the loose fallback when nothing fits.
+      // pens can slip a lattice step, or a width can be off by a shaping
+      // choice: while HarfBuzz still formed the tt ligature, RICHARD BARNETT
+      // measured 0.51 px short of its bar and only this kept it in view).
+      // Without a tester they are the loose fallback when nothing fits.
       const field = { over: box.tolerance ?? 3, under: Math.max(box.tolerance ?? 3, range.under) };
       const near = range.over < field.over
         ? measured.filter(c => !fitsRange(range, d(c)) && fitsRange(field, d(c))).map(c => entry(c, true))
@@ -1194,9 +1219,11 @@
                <button class="match-cycle-btn" data-box="${box.id}" data-cycle="-1">&lsaquo;</button>${counter}<button class="match-cycle-btn" data-box="${box.id}" data-cycle="1">&rsaquo;</button>
              </span>`
           : '';
+        const faceNote = box.widthFace ? ` · ${escAttr(box.widthFace)}` : '';
+        const faceTitle = box.widthFace ? ` Names measured in the page's own face (the reader's ${box.widthFace} set).` : '';
         const tolNote = penExact(box)
-          ? `<span class="match-tol" title="Both edges come from the reader's ¼-px pens: the width is exact to the lattice">±${tol.toFixed(2)} px · pens</span>`
-          : `<span class="match-tol" title="Edges from the raster — the Tolerance field applies">±${tol} px</span>`;
+          ? `<span class="match-tol" title="Both edges come from the reader's ¼-px pens: the width is exact to the lattice.${escAttr(faceTitle)}">±${tol.toFixed(2)} px · pens${faceNote}</span>`
+          : `<span class="match-tol" title="Edges from the raster — the Tolerance field applies.${escAttr(faceTitle)}">±${tol} px${faceNote}</span>`;
         const looseNote = loose
           ? `<div class="match-loose">No name fits the pen-exact width (±${PEN_TOL_PX} px). Nearest within ±${tol} px:</div>`
           : '';

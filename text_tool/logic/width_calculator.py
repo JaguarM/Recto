@@ -17,7 +17,7 @@ def _resolve_font_path(font_name):
     return resolve_file(font_name)
 
 
-def get_text_widths(texts, font_name="times.ttf", font_size=12, force_uppercase=False, scale_factor=_DEFAULT_SCALE_FACTOR, kerning=True, space_width=None):
+def get_text_widths(texts, font_name="times.ttf", font_size=12, force_uppercase=False, scale_factor=_DEFAULT_SCALE_FACTOR, kerning=True, space_width=None, ligatures=True):
     """
     Calculates pixel widths for a list of text strings using HarfBuzz shaping.
     Returns list of {text, width, chars} dicts where chars holds per-character x offsets.
@@ -40,6 +40,13 @@ def get_text_widths(texts, font_name="times.ttf", font_size=12, force_uppercase=
         upem = face.upem
 
         features = {"kern": bool(kerning)}
+        # HarfBuzz forms standard ligatures unless told not to, and Calibri
+        # has them: "ff" shapes 0.43 px narrower than f + f, "tt" 0.57 px.
+        # A producer that never set ligatures (Word, by default) laid its
+        # glyphs at the plain advances, so a caller matching such a page asks
+        # for ligatures=False and gets the hmtx sum.
+        if not ligatures:
+            features.update({"liga": False, "clig": False})
 
         space_buf = hb.Buffer()
         space_buf.add_str(" ")

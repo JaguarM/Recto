@@ -148,6 +148,16 @@ engine's `hypothesis.js` (synced verbatim, certified in tol0 by
 identifies a sliver; it verifies a short list. Registered after
 `pixel-view.js`; without `redaction_refiner` it returns `null`.
 
+The same file defines the **width seam** `window.ocrMeasureWidths(box,
+strings) → Promise<{ widths: (number | null)[], face } | null>`: the strings
+laid out in the reader's glyph set for the bar's row (`OCRRender.layoutLine`,
+plain — no page metrics — with the refiner's row space), so a matcher measures
+candidates in the face that actually drew the page, at its own advances,
+rather than in the installed font file. Widths come back in viewBox px; a
+string with a glyph the set lacks is `null`; the call is `null` when the row
+has no reader line or no set is loaded. `redaction_matching` takes these over
+its HarfBuzz widths when offered.
+
 ## Limits
 
 Byte-exact reading requires the document family's renderer to be modelled —

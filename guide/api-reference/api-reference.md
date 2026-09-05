@@ -157,6 +157,7 @@ Calculate pixel widths for a list of text strings using HarfBuzz text shaping.
 | `size` | number | `12` | Font size in points |
 | `scale` | number | `135` | Scale percentage (divided by 100 internally to get `scale_factor`) |
 | `kerning` | bool | `true` | Enable OpenType `kern` feature |
+| `ligatures` | bool | `true` | Let HarfBuzz form standard ligatures (`liga`, `clig`). `false` measures plain advances — what a producer that set no ligatures (Word, by default) laid on the page; Calibri's `ff` / `tt` differ by half a pixel |
 | `force_uppercase` | bool | `false` | Measure uppercase version of each string |
 
 The width formula applied by the backend is:

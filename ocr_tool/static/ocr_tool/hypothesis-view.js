@@ -1,7 +1,9 @@
 // hypothesis-view.js — the string-hypothesis seam: window.ocrTestHypothesis
 // (box, name) → Promise<verdict | null>, consumed by redaction_matching's
 // scoreMatches after every width recompute (guide/plugins/redaction-refiner/
-// pixel-evidence-plan.md). It draws a candidate name where the refiner put
+// pixel-evidence-plan.md) — and, at the end of the file, the width seam
+// window.ocrMeasureWidths(box, strings), which measures candidates in the
+// page's own face. It draws a candidate name where the refiner put
 // the bar — the line's own glyph set, baseline, y-phase and ¼-px pens —
 // composites the bar over it as the redactor did, and lets the page bytes
 // outside the bar's black body judge it (tol0 engine/hypothesis.js, synced
@@ -160,3 +162,46 @@ async function ocrTestHypothesis(box, name) {
 }
 window.ocrTestHypothesis = ocrTestHypothesis;
 window.OCRHypothesisView = hypothesisView;
+
+// ── The width seam: window.ocrMeasureWidths(box, strings) ──────────────
+// → Promise<{ widths: (number|null)[], face } | null>, consumed by
+// redaction_matching after its HarfBuzz measurement. The strings are laid
+// out in the reader's glyph set for the bar's row — the face that drew the
+// page, glyph by glyph at its own advances (the set's, or the producer's
+// build's where they differ: LAWS §6). Laid out PLAIN — no page metrics:
+// the measured kern table is for placing glyphs on the page and widened
+// every name's miss on the memos — with the refiner's row space, the space
+// the bar was derived with, so the two are the same measure (the reader's
+// calibrated space is 0.07 px tighter and fits the bars worse). On the
+// memos this agrees with HarfBuzz to the font unit once HarfBuzz stops
+// forming ligatures (RICHARD BARNETT, LESLEY GROFF: 0.5 px short with them).
+// Widths are returned in viewBox px like box.w. A string with a glyph the
+// set lacks gets null; the whole call is null when the row has no reader
+// line or no set is loaded.
+async function ocrMeasureWidths(box, strings) {
+  if (typeof OCRRender === 'undefined' || typeof RedactionRefiner === 'undefined') return null;
+  if (!box || box.type !== 'redaction' || !Array.isArray(strings)) return null;
+  if (!ocrToolState.sets) { await pvEnsureSets(); if (!ocrToolState.sets) return null; }
+  const nb = RedactionRefiner.neighboursFor(box);
+  if (nb.source !== 'ocr' || (!nb.left && !nb.right)) return null;
+  const span = (nb.left || nb.right).span;
+  if (!span.ocr) return null;
+  const setInfo = pvSetsForBox(span);
+  if (!setInfo) return null;
+  const leftChars = nb.left ? hvWordChars(nb.left) : [];
+  const rightChars = nb.right ? hvWordChars(nb.right) : [];
+  const adj = leftChars.length ? leftChars[leftChars.length - 1].cp : rightChars.length ? rightChars[0].cp : null;
+  const set = (adj?.src && setInfo.byName.get(adj.src)) || setInfo.primary;
+  // viewBox px per page px: the OCR boxes were scaled by this when created
+  const info = pvPageInfo(box.page);
+  const sx = info ? (state.pageWidth || info.page.w) / info.page.w : 1;
+  const ri = box.refineInfo;
+  const space = ri?.left?.space ?? ri?.right?.space ?? ((span.ocr.spaceAdv ?? pvSpaceAdv(span, set)) * sx);
+  const widths = strings.map(s => {
+    const text = box.uppercase ? String(s).toUpperCase() : String(s);
+    const lay = OCRRender.layoutLine(set, text, 0, { spaceAdv: space / sx });
+    return lay.missing.length ? null : lay.advanceW * sx;
+  });
+  return { widths, face: set.name };
+}
+window.ocrMeasureWidths = ocrMeasureWidths;

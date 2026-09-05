@@ -8,6 +8,8 @@ is added, moved, renamed, or removed.
 Run with: python manage.py test text_tool
 """
 
+import json
+
 from django.conf import settings
 from django.test import TestCase
 
@@ -123,6 +125,22 @@ class WidthEndpointTests(TestCase):
                                 content_type='application/json')
         self.assertEqual(resp.status_code, 200)
         self.assertGreater(resp.json()['results'][0]['width'], 0)
+
+    def test_widths_without_ligatures_are_the_plain_advances(self):
+        # HarfBuzz shapes "ff" and "tt" into ligatures by default (Calibri
+        # has them); a caller matching a page set without them asks for the
+        # plain hmtx sum.
+        def widths(**extra):
+            body = {'strings': ['Groff', 'Grof', 'f', 'Barnett', 'Barnet', 't'],
+                    'family': 'Calibri', 'size': 12, 'scale': 133.3333, 'kerning': False, **extra}
+            r = self.client.post('/widths', data=json.dumps(body), content_type='application/json')
+            self.assertEqual(r.status_code, 200)
+            return [x['width'] for x in r.json()['results']]
+        shaped = widths()
+        plain = widths(ligatures=False)
+        self.assertLess(shaped[0], shaped[1] + shaped[2] - 0.3, 'ligatures on: Groff narrower than Grof + f')
+        self.assertAlmostEqual(plain[0], plain[1] + plain[2], places=3)
+        self.assertAlmostEqual(plain[3], plain[4] + plain[5], places=3)
 
     def test_widths_rejects_get(self):
         self.assertEqual(self.client.get('/widths').status_code, 405)

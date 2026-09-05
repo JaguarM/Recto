@@ -34,8 +34,10 @@ class RedactionMatchingTests(TestCase):
         src = API_JS.read_text(encoding='utf-8')
         self.assertNotIn('firstLetter', src)
         self.assertNotIn('lastLetter', src)
-        # Faces resolve through the font catalogue, not a file-name map.
+        # Faces resolve through the font catalogue, not a file-name map; the
+        # widths are plain advances (no ligatures), as a Word page lays them.
         self.assertNotIn('fontFamilyToTtf', src)
+        self.assertIn('ligatures: false', src)
         for name in ('matchesLetterFilter', 'getBoxMatchInfo', 'getBoxMatches', 'setBoxMatch',
                      'cycleBoxMatch', 'effectiveTolerance', 'scoreMatches', 'linkFor', 'pairReadings'):
             self.assertRegex(src, rf'function {name}\(')
@@ -55,4 +57,4 @@ class RedactionMatchingTests(TestCase):
         # The version string is the browser cache key: it must be a v=N literal.
         version = PDFToolRegistry.get_tools()['redaction_matching'].scripts_before_viewer[0]['version']
         self.assertRegex(version, r'^v=\d+$')
-        self.assertGreaterEqual(int(version[2:]), 16)
+        self.assertGreaterEqual(int(version[2:]), 17)

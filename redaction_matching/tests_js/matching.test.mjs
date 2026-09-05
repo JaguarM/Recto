@@ -30,6 +30,14 @@ globalThis.utbState = {
   getBox(id) { return this.boxes.find((b) => b.id === id); },
 };
 globalThis.PDFHooks = { on() {}, emit() {} };
+globalThis.GEO = { docScale: () => 100 * 96 / 72, docPxPerPt: () => 96 / 72, docPtToPx: (pt) => pt * 96 / 72 };
+// The HarfBuzz endpoint: a fixed width per string.
+const HB = { Ada: 30.0, Bob: 40.0, 'Cy Dee': 50.0 };
+globalThis.fetch = async (url, opts = {}) => {
+  if (url !== '/widths') return { ok: false, status: 404 };
+  const body = JSON.parse(opts.body);
+  return { ok: true, json: async () => ({ results: body.strings.map((s) => ({ width: HB[s] ?? 0 })) }) };
+};
 
 vm.runInThisContext(fs.readFileSync(path.join(root, 'static', 'redaction_matching', 'api.js'), 'utf8'));
 for (const fn of ['getBoxMatchInfo', 'getBoxMatches', 'effectiveTolerance', 'scoreMatches', 'shownMatch', 'matchesLetterFilter',
@@ -165,8 +173,9 @@ function pairFixture(kind = 'row') {
   }
   A.refineInfo.x = A.x; A.refineInfo.w = A.w;
   B.refineInfo.x = B.x; B.refineInfo.w = B.w;
-  A.nameSettings = { ...state.nameSettings };
-  B.nameSettings = { ...state.nameSettings };
+  // The fixture's halves are first[0] / last[0]; the aliases test turns expansion on.
+  A.nameSettings = { ...state.nameSettings, expandFirstAliases: false, expandLastAliases: false };
+  B.nameSettings = { ...state.nameSettings, expandFirstAliases: false, expandLastAliases: false };
   utbState.boxes.push(A, B);
   return { A, B };
 }
@@ -316,6 +325,43 @@ test('a detector edge admits names narrower than the bar by the redactor\'s padd
   // No refiner at all: every edge is the detector's.
   delete box.refineInfo;
   assert.deepEqual(getBoxMatches(box), ['Bledsoe']);
+});
+
+test('widths come from the page\'s own face when a reader offers them, else from HarfBuzz', async () => {
+  const mk = () => {
+    const box = bar({ candidates: ['Ada', 'Bob', 'Cy Dee'], widths: {} });
+    utbState.boxes = [box];
+    return box;
+  };
+  let box = mk();
+  await calculateWidthsForRedaction(box.id);
+  assert.deepEqual(box.widths, { Ada: 30.0, Bob: 40.0, 'Cy Dee': 50.0 }, 'HarfBuzz alone');
+  assert.equal(box.widthFace, null);
+  // A reader's set measures the row's face: it wins where it can draw the
+  // string; a string with a glyph the set lacks keeps the HarfBuzz width.
+  const asked = [];
+  globalThis.ocrMeasureWidths = async (b, strings) => { asked.push(strings); return { widths: strings.map(s => s === 'Bob' ? null : HB[s] + 0.5), face: 'calibri102' }; };
+  box = mk();
+  await calculateWidthsForRedaction(box.id);
+  assert.deepEqual(asked, [['Ada', 'Bob', 'Cy Dee']]);
+  assert.deepEqual(box.widths, { Ada: 30.5, Bob: 40.0, 'Cy Dee': 50.5 });
+  assert.equal(box.widthFace, 'calibri102');
+  // No reader row → null → HarfBuzz stands. A throwing provider too.
+  globalThis.ocrMeasureWidths = async () => null;
+  box = mk();
+  await calculateWidthsForRedaction(box.id);
+  assert.deepEqual(box.widths, { Ada: 30.0, Bob: 40.0, 'Cy Dee': 50.0 });
+  globalThis.ocrMeasureWidths = async () => { throw new Error('boom'); };
+  box = mk();
+  await calculateWidthsForRedaction(box.id);
+  assert.equal(box.widths.Ada, 30.0);
+  delete globalThis.ocrMeasureWidths;
+  utbState.boxes = [];
+});
+
+test('every alias is a candidate by default', () => {
+  assert.equal(state.nameSettings.expandFirstAliases, true);
+  assert.equal(state.nameSettings.expandLastAliases, true);
 });
 
 test('starts-with / ends-with filter takes several letters, case-insensitive', () => {

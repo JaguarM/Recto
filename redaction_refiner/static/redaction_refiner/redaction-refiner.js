@@ -557,6 +557,7 @@
           size: span.sizePt,
           scale,
           kerning: false,
+          ligatures: false,   // plain advances, as the matcher measures
         }),
       });
       if (resp.ok) {

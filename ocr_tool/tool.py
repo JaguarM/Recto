@@ -38,5 +38,5 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=9'},
         {'path': 'ocr_tool/pixel-view.js', 'version': 'v=5'},
         # the hypothesis seam: window.ocrTestHypothesis for redaction_matching
-        {'path': 'ocr_tool/hypothesis-view.js', 'version': 'v=6'},
+        {'path': 'ocr_tool/hypothesis-view.js', 'version': 'v=7'},
     ]

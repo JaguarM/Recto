@@ -6,7 +6,7 @@
 
 ## Functions
 
-### `get_text_widths(texts, font_name, font_size, force_uppercase, scale_factor, kerning)`
+### `get_text_widths(texts, font_name, font_size, force_uppercase, scale_factor, kerning, space_width=None, ligatures=True)`
 
 Calculates pixel widths for a list of text strings.
 
@@ -20,6 +20,8 @@ Calculates pixel widths for a list of text strings.
 | `force_uppercase` | bool | `False` | Convert text to uppercase before measuring |
 | `scale_factor` | float | `geo.DEFAULT_SCALE / 100` (≈ `1.333`) | Multiplier applied to the raw advance width (pt → image px) |
 | `kerning` | bool | `True` | Enable OpenType `kern` feature |
+| `space_width` | float/None | `None` | Substitute this advance (image px) for every space glyph |
+| `ligatures` | bool | `True` | Let HarfBuzz form standard ligatures (`liga`, `clig`); `False` gives the plain hmtx sum, as a page set without ligatures was laid |
 
 **Output:**
 
