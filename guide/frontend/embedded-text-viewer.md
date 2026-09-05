@@ -185,7 +185,7 @@ Within each batch:
 The `lineId` field groups all boxes that belong to the same horizontal line of text. It drives two behaviors:
 
 - **Grouped vertical drag** (`drag-resize.js`): dragging any box vertically moves all boxes sharing its `lineId` and `page` by the same `dy`. Linked redaction boxes also follow.
-- **Redaction snapping** (`utbConnectRedactionsToLines`): when a redaction's bounding box overlaps an embedded span by ≥30% of the redaction's height, the redaction inherits that span's `lineId`, `y`, and `h`.
+- **Redaction snapping** (`utbConnectRedactionsToLines`): when a redaction's bounding box overlaps a text line by ≥30% of the redaction's height, the redaction inherits that line's `lineId`, `y`, `h`, and its typography (`fontFamily`, `sizePt`, `bold`, `italic`) — so anything measuring text against the bar measures in the page's own font. An `ocr` line wins over an `embedded` span when both overlap: its size is measured from the glyphs, whereas a scanned document's text layer only approximates it. The redaction is marked `uppercase` when a known candidate name appears **in capitals** on that line, as written.
 
 ---
 

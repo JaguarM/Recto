@@ -221,35 +221,51 @@ function utbConnectRedactionsToLines() {
   redactionBoxes.forEach(rb => {
     if (rb.lineId !== null) return;
 
-    const pageEmbedded = embeddedBoxes.filter(b => b.page === rb.page);
-    let bestBox = null;
-    let bestOverlap = 0;
-
-    for (const eb of pageEmbedded) {
-      const overlap = Math.min(rb.y + rb.h, eb.y + eb.h) - Math.max(rb.y, eb.y);
-      if (overlap > bestOverlap) {
-        bestOverlap = overlap;
-        bestBox = eb;
+    // The line with the most vertical overlap. When the reader has read the
+    // page, its lines win over the embedded ones: their baseline, height and
+    // size are measured from the glyphs on the page, whereas a scanned
+    // document's embedded text layer only approximates them (its sizes drift
+    // word by word), and a bar must not adopt an 11 pt guess for a 12 pt line.
+    const pageBoxes = embeddedBoxes.filter(b => b.page === rb.page);
+    const best = (list) => {
+      let box = null, overlap = 0;
+      for (const eb of list) {
+        const o = Math.min(rb.y + rb.h, eb.y + eb.h) - Math.max(rb.y, eb.y);
+        if (o > overlap) { overlap = o; box = eb; }
       }
-    }
-
-    if (!bestBox || bestOverlap < rb.h * 0.3) return;
+      return overlap >= rb.h * 0.3 ? box : null;
+    };
+    const bestBox = best(pageBoxes.filter(b => b.type === 'ocr')) || best(pageBoxes);
+    if (!bestBox) return;
 
     rb.lineId = bestBox.lineId;
     rb.y = bestBox.y;
     rb.h = bestBox.h;
+    // A detected bar carries no typography of its own; the line it sits on
+    // does. Adopt the line's face, size and style — as a manually added bar
+    // inherits them from its nearest line — so whatever measures text against
+    // the bar measures in the page's own font, not the box default.
+    if (bestBox.fontFamily) rb.fontFamily = bestBox.fontFamily;
+    if (bestBox.sizePt > 0) rb.sizePt = bestBox.sizePt;
+    rb.bold = !!bestBox.bold;
+    rb.italic = !!bestBox.italic;
 
     const lineBoxes = embeddedBoxes.filter(b => b.page === rb.page && b.lineId === bestBox.lineId);
+    // The hidden name is set in capitals when the line writes its other names
+    // that way ("including ███ and GHISLAINE MAXWELL"): test the candidate
+    // phrases, uppercased, against the line AS WRITTEN. (Against an uppercased
+    // copy every line naming a known person would match, and a mixed-case
+    // document would measure every bar in capitals.)
     let hasUpper = false;
     if (typeof state !== 'undefined' && state.candidates && state.candidates.length > 0) {
-      const lineUpper = lineBoxes.map(lb => lb.text || '').join(' ').toUpperCase();
+      const lineText = lineBoxes.map(lb => lb.text || '').join(' ');
       for (const c of state.candidates) {
         const words = c.toUpperCase().trim().split(/\s+/).filter(Boolean);
         // Skip trivially short names (e.g. "Al", "Ed") — too ambiguous to force uppercase
         if (words.join('').replace(/[^A-Z]/g, '').length < 3) continue;
         // Escape regex metacharacters per word; tolerate variable whitespace between name parts
         const phrasePattern = new RegExp('\\b' + words.map(w => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('\\s+') + '\\b');
-        if (phrasePattern.test(lineUpper)) {
+        if (phrasePattern.test(lineText)) {
           hasUpper = true;
           break;
         }
