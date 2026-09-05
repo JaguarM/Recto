@@ -316,9 +316,9 @@ session builds, in order, and the contract it plugs into:
 
 ## Limits, stated up front
 
-- **No leak, no verdict.** A full-height body with dark edges (bar 1) yields
-  `no-evidence` for every candidate. The UI must show that as a tie, not as
-  a match.
+- **No shadow, no verdict.** A body whose edge columns carry no shadow of the
+  name yields `no-evidence` for every candidate, and the UI shows that as a
+  tie. (A dark edge with a shadow in it is evidence — see *What changed*.)
 - **The list must contain the truth.** `consistent` means *not contradicted by
   the page*, never *proven*. A name absent from the pool cannot be found.
 - **Producer rasters only.** The whole chain is byte-exact because these pages
@@ -364,10 +364,12 @@ they were found (each one first showed up as the *truth* being contradicted on
   cannot draw (a phase it lacks) never outranks a judged one.
 - **Only edge columns judge.** A bar's top and bottom rows carry the
   neighbouring lines' descenders and ascenders and the corners where two bars
-  meet; over the box's own rows the column's bar byte is its maximum seen on
-  two rows (the reader's mode is fooled by a uniform stem shadow), dark edges
-  (< 160) stay dark, and black under a light edge is destroyed — a black glyph
-  pixel and another bar's body composite to the same 0.
+  meet; over the box's own rows the column's bar byte is its maximum
+  corroborated by a second row — the reader's mode is fooled by a uniform
+  stem shadow, and the second unshadowed row may hold the bar over a glyph's
+  254 (a `d` stem left 196 once, 194 once) — and black under an edge is
+  destroyed: a black glyph pixel and another bar's body composite to the
+  same 0.
 - **Unvoted flush lines are destroyed, not open.** When the hidden glyphs
   shadow most of an edge column (a bar no taller than its text) the reader's
   constancy vote fails and the column stays unpadded; the tester treats the
@@ -381,25 +383,46 @@ they were found (each one first showed up as the *truth* being contradicted on
   a 12-px pitch the line above's descenders share rows with this line's
   ascenders.
 
-What the bench says now (tol0 `npm run bench:hypothesis`, 15 settings each):
-Courier page 22 words — truth consistent 113, contradicted **0**, no-evidence
-217; decoys 1,205 of 1,575 contradicted, 9 ties (`-0800` / `-0000`,
-`01:13:54` / `01:12:12` — the difference is under the body, which is the
-premise measured). Times page 42 words — truth consistent 168, contradicted 1
-(`Record`, whose only space estimate is the page's fallback, 1.08 px off),
-no-evidence 461; decoys 705 of 885 contradicted, 0 ties. On the reference
-document the item-2 bar tested with its five font-unit ties by pixels alone
-keeps SARAH KELLEN (open 9/9, edge 8/8, unexplained 0) and contradicts the
-other four; the item-3 bar is six-way no-evidence. `tools/verify-redactions.mjs`
-asserts both.
+What the bench says now (tol0 `npm run bench:hypothesis`, 15 settings each,
+dark edges judged): Courier page 22 words — truth consistent 244, contradicted
+**0**, no-evidence 86; decoys 1,927 of 2,055 contradicted, 20 ties (`-0800` /
+`-0000`, `01:13:54` / `01:12:12`, `Re:` / `To:` two columns in — the
+difference is under the body, which is the premise measured). Times page 42
+words — truth consistent 471, contradicted **0**, no-evidence 159; decoys 890
+of 915 contradicted, 13 ties (`Departs:` / `Locator:` under a dark edge,
+`9:10` / `9:47`). Before the dark edges judged the truth was consistent 113
+and 168 times, and `Record` was contradicted once on the line whose only
+space estimate is the page's fallback — a bar-byte estimate, cured by the
+corroboration above. On the reference document the item-2 bar tested with its
+five font-unit ties by pixels alone keeps SARAH KELLEN (open 9/9, edge 8/8,
+unexplained 0) and contradicts the other four; the item-3 bar keeps it too
+(below). `tools/verify-redactions.mjs` asserts both.
 
-Across Recto's 22 test documents (`node tools/verify-redactions.mjs --limit 22
---max-pages 2`, 2026-09-05): 345 bars, 176 with a candidate list — 0 unique, 0
-tied, 106 no-evidence, 59 with every name contradicted, 11 unscored. The 59
-are the list not containing the truth (the list is names; those bars hide
-e-mail addresses and IDs), which is what *contradicted for all* is for; the
-106 are full-height bars with dark edges, as the plan measured up front.
+- **Dark edges judge, with a byte of slack.** The plan expected bar 1 (item
+  3) to yield *no evidence*: a full-height body with dark edges. The user's
+  rule — find the black body's edge column, strip its own byte, keep the
+  darker pixels — turns that column into evidence: its nine darker pixels
+  (68, 44, 44, 70, 65, 45, 45, 45, 69 under a 74 edge) are the hidden name's
+  first column. The reader still refuses a dark edge for a single glyph (the
+  compositor slips a byte), but over a list one byte of slack is harmless:
+  SARAH KELLEN hits 9 of 9, the three drawable decoys hit 1–2 and leave 7–9
+  unexplained, GÉRALD MARIE is contradicted at its own pen. With the evidence
+  floor at 6 pixels (the list's contradictions guard; 12 was the reader's
+  single-glyph floor) both bars of the reference document now resolve to
+  SARAH KELLEN, and `verify-redactions.mjs` asserts both.
+
+Across Recto's first 22 test documents (`node tools/verify-redactions.mjs`,
+2026-09-05, dark edges judged, 5 pages read per document): 361 bars, 183 with
+a candidate list — 4 unique, 1 tied, 88 no-evidence, 76 with every name
+contradicted, 14 unscored. Before the dark edges judged the same documents
+gave 0 unique, 106 no-evidence and 59 all-contradicted: the dark edge columns
+turned no-evidence bars into contradictions (the list not containing the
+truth — those bars hide e-mail addresses and IDs) and, on EFTA00382173, into
+four unique names (one of them 1 consistent against 60 contradicted) and one
+tie. The user tested and approved the result; the next improvements are on
+Recto's side, first the redaction boxes drawn twice (the report scores the
+same bar twice on that page).
 
 Not built, by decision: document-level width comparison. Not built yet: the
-bar-padding prior. Shadow reads stay opt-in in the reader and are not used by
-the tester (dark edges carry no evidence either way).
+bar-padding prior. Shadow reads stay opt-in in the reader; the tester judges
+dark edges on its own terms (a list, a byte of slack).

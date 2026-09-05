@@ -151,8 +151,13 @@ after every width recompute and shows the verdict on each chip:
 - `✓` **consistent** — every judged pixel matches, no page ink in the name's
   window is left unexplained, on at least 12 pixels of evidence;
 - `✗` **contradicted** — with the counts in the chip's title;
-- `–` **no evidence** — the bar left nothing to compare (a full-height body
-  with dark edges, the common case), or the set lacks a glyph.
+- `–` **no evidence** — the bar left nothing to compare (a body whose edge
+  columns carry no shadow of the name), or the set lacks a glyph.
+
+A dark edge column judges too: strip the column's own byte and the darker
+pixels are the hidden name's first (or last) column, compared with one byte
+of slack for the box compositor's rounding — on the reference page that is
+what names the item-3 bar SARAH KELLEN from nine pixels of a 74 edge.
 
 Two consistent names are a tie, and the tie is the answer. Inputs come from
 `neighboursFor(box)` (the neighbour OCR segments and their pens),

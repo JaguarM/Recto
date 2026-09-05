@@ -13,7 +13,10 @@
 //
 //   consistent    every judged pixel matches (to the line's own tolerance)
 //                 and no page ink in the window is left unexplained, on at
-//                 least minInk pixels of evidence
+//                 least minInk pixels of evidence (default 6: over a LIST the
+//                 contradictions do the guarding — on the reference bar the
+//                 right name fits 9 shadow pixels and every other name is
+//                 contradicted on the same 9)
 //   contradicted  a judged pixel differs, or page ink no glyph explains
 //   no-evidence   the bar left nothing to compare (or the set lacks a glyph)
 //
@@ -26,8 +29,13 @@
 //                      scaled by the bar's alpha, bar drawn last; linear sets
 //                      use the product with one shift per light contributor
 //                      and the producer's 1-lighter ambiguity, as scanLine does
-//   body / dark edge   nothing — the ink is destroyed, and box compositors
-//                      slip a byte on dark edges (LAWS §8)
+//   dark edge (< 160)  the same composite, judged with ONE byte of slack:
+//                      box compositors slip a byte there (LAWS §8) — the
+//                      reader refuses that evidence for a single glyph, but
+//                      over a LIST a byte of slack is harmless: on the
+//                      reference bar the right name hits 9 of 9 shadow
+//                      pixels of a 74 edge and the wrong ones 1 or 2 of 9
+//   body               nothing — the ink is destroyed
 // A white prediction under a light edge predicts the edge byte itself; page
 // ink there that the candidate does not draw is hidden ink the candidate
 // lacks — unexplained, hence contradicted.
@@ -108,12 +116,12 @@
   //     dark, unexplained, edgeOnly, window: {x0, y0, w, h}, mism, render }
   function testHypothesis(page, det, set, line, box, text, opts) {
     const quant = opts?.quant || null;
-    const minInk = opts?.minInk ?? 12;
+    const minInk = opts?.minInk ?? 6;
     const explained = opts?.explained || [];
     const tol = line.tol || 0, phy = line.phy || 0;
     const spaceLine = line.spaceLine ?? null;
     const none = (reason, extra) => ({ verdict: 'no-evidence', reason, ...extra,
-      open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0 },
+      open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0, match: 0, differ: 0 },
       unexplained: 0, edgeOnly: false });
 
     // 1. layout: advance first (pen0 may hang on it), then at the real pen
@@ -143,7 +151,7 @@
     let best = null;
     for (const p of pens) {
       const v = testAtPen(page, det, set, line, text, p, lay0, { quant, minInk, explained, tol, phy, spaceLine, trace: opts?.trace });
-      const key = [rank(v), v.open.differ + v.edge.differ + v.unexplained];
+      const key = [rank(v), v.open.differ + v.edge.differ + v.dark.differ + v.unexplained];
       if (!best || key[0] < best.key[0] || (key[0] === best.key[0] && key[1] < best.key[1])) best = { v, key };
       if (v.verdict === 'consistent') break;                 // the nearest pen that fits wins
     }
@@ -154,7 +162,7 @@
   function testAtPen(page, det, set, line, text, pen0, lay0, o) {
     const { quant, minInk, explained, tol, phy, spaceLine } = o;
     const none = (reason, extra) => ({ verdict: 'no-evidence', reason, ...extra,
-      open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0 },
+      open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0, match: 0, differ: 0 },
       unexplained: 0, edgeOnly: false, pen0 });
     const lay = R.layoutLine(set, text, pen0, { spaceAdv: spaceLine ?? undefined, metrics: line.metrics ?? null });
     const advanceW = lay.advanceW;
@@ -170,7 +178,7 @@
         const gl = lay.glyphs.map((g, i) => i === lay.glyphs.length - 1 ? { ...g, pen: g.pen + d } : g);
         const v = judge(page, det, set, line, text, pen0, { ...lay, glyphs: gl }, o);
         // a pen the set cannot draw proves nothing: it never beats a judged pen
-        const key = v.reason === 'missing' ? Infinity : v.open.differ + v.edge.differ + v.unexplained;
+        const key = v.reason === 'missing' ? Infinity : v.open.differ + v.edge.differ + v.dark.differ + v.unexplained;
         if (!best || key < best.key) best = { v, key };
         if (!key) break;
       }
@@ -217,7 +225,12 @@
     // corner in the same column must not vote)
     const colByte = new Map();
     const barByte = (x, y, ev) => {
-      if (ev < 160) return ev;                              // a dark edge stays dark: no evidence, whatever the column's other cells show
+      // the reader's mode can be the SHADOW's byte when a stem-adjacent
+      // column is uniform on most rows (153 on a 196 edge); the maximum the
+      // column shows on two rows is the bar's own on every edge, dark ones
+      // included (74 on the reference bar) — corroborated by a second row
+      // that is at least the bar over a 254, the lightest glyph pixel there
+      // is (a stem that shadows 10 of 13 rows left 196 once and 194 once)
       const b = boxes.find(o => y >= o.y0 && y < o.y1 && (x === o.x0 - 1 || x === o.x0 || x === o.x1 - 1 || x === o.x1));
       if (!b) return ev;
       const key = x + ':' + b.y0;
@@ -227,9 +240,13 @@
         const i = yy * page.w + x;
         if (edgeV[i]) n.set(page.gray[i], (n.get(page.gray[i]) ?? 0) + 1);
       }
+      const vals = [...n.keys()].sort((p, q) => q - p);
       let mx = -1;
-      for (const [v, c] of n) if (c >= 2 && v > mx) mx = v;
-      const out = mx >= 160 ? mx : ev;
+      for (let i = 0; i < vals.length; i++) {
+        const own = n.get(vals[i]), next = vals[i + 1];
+        if (own >= 2 || (next !== undefined && next >= (vals[i] * 254) >> 8)) { mx = vals[i]; break; }
+      }
+      const out = mx > 0 ? mx : ev;
       colByte.set(key, out);
       return out;
     };
@@ -269,7 +286,7 @@
       return false;
     };
 
-    const open = { ink: 0, match: 0, differ: 0 }, edge = { ink: 0, match: 0, differ: 0 }, dark = { ink: 0 };
+    const open = { ink: 0, match: 0, differ: 0 }, edge = { ink: 0, match: 0, differ: 0 }, dark = { ink: 0, match: 0, differ: 0 };
     let unexplained = 0;
     for (let y = wy0; y < wy1; y++) {
       for (let x = wx0; x < wx1; x++) {
@@ -285,14 +302,15 @@
         // bench), never the hidden name's own ink
         const ev = m && edgeMap && edgeV && edgeV[pOff] ? barByte(x, y, edgeMap[pOff]) : 0;
         const t = tol && hits > 1 ? 2 * tol : tol;
-        if ((m && (ev < 160 || pv === 0)) || (!m && flush(x, y))) {   // body, dark edge, rule, dust, black under an edge, an unvoted edge column: destroyed
-          if (g < 255) dark.ink++;
+        if ((m && (!ev || pv === 0)) || (!m && flush(x, y))) {   // body, rule, dust, black under an edge, an unvoted edge line: destroyed
           continue;
         }
-        if (m) {                                              // light edge: the composite is judged
-          const ok = edgePreds(g, ev, lin).some(p => Math.abs((quant ? quant[p] : p) - pv) <= t);
-          if (g < 255) { edge.ink++; if (ok) edge.match++; else { edge.differ++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: 'edge' }); } }
-          else if (!ok && y >= jTop && y < jBot && !inkedBy(x, y)) { unexplained++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: 'edge-unexplained' }); }
+        if (m) {                                              // an edge: the composite is judged —
+          const dk = ev < 160, slack = dk ? 1 : 0;            // a dark one with the compositor's byte of slack
+          const ok = edgePreds(g, ev, lin).some(p => Math.abs((quant ? quant[p] : p) - pv) <= t + slack);
+          const c = dk ? dark : edge;
+          if (g < 255) { c.ink++; if (ok) c.match++; else { c.differ++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark' : 'edge' }); } }
+          else if (!ok && y >= jTop && y < jBot && !inkedBy(x, y)) { unexplained++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark-unexplained' : 'edge-unexplained' }); }
           continue;
         }
         if (g < 255) {                                        // open page: the glyph's own byte
@@ -304,11 +322,12 @@
         }
       }
     }
-    const judged = open.ink + edge.ink;
-    const verdict = open.differ || edge.differ || unexplained ? 'contradicted'
+    const judged = open.ink + edge.ink + dark.ink;
+    const verdict = open.differ || edge.differ || dark.differ || unexplained ? 'contradicted'
       : judged >= minInk ? 'consistent' : 'no-evidence';
     return { verdict, pens: lay.glyphs.map(g => g.pen), advanceW, penFit, pen0,
-      open, edge, dark, unexplained, edgeOnly: open.ink === 0 && edge.ink > 0,
+      open, edge, dark, unexplained, edgeOnly: open.ink === 0 && edge.ink + dark.ink > 0,
+      darkOnly: open.ink === 0 && edge.ink === 0 && dark.ink > 0,
       window: { x0: wx0, y0: wy0, w: W, h: H }, mism, render: r,
       ...(verdict === 'no-evidence' ? { reason: judged ? 'below-floor' : 'destroyed' } : {}) };
   }
