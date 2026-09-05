@@ -224,6 +224,155 @@ test('OCR layer wins once present and converges on the same edge', async () => {
   near(Math.abs(box.w - NAME_W), 0, 0.3, 'the pen equation holds to the lattice');
 });
 
+// ── Adjacent bars ──────────────────────────────────────────
+test('two bars a space apart do not stretch across each other', async () => {
+  // "for [A] [B] traveling" — the shape that used to collapse both bars onto
+  // one span, so the same stretch of page was scored twice.
+  reset();
+  const left = span({ text: 'for', x: 100, w: widthPx('for', 12), baseCharPositions: charsFor('for'), lineId: 'L' });
+  const right = span({ text: 'traveling', x: 290, w: widthPx('traveling', 12), baseCharPositions: charsFor('traveling'), lineId: 'L' });
+  const A = redaction(130, 200); A.lineId = 'L';
+  const B = redaction(210, 280); B.lineId = 'L';
+  utbState.boxes.push(left, right, A, B);
+
+  await R.refineRedaction(A);
+  await R.refineRedaction(B);
+
+  // Outer edges refine against the real words; inner edges keep the ink.
+  assert.equal(A.refineInfo.left.token, 'for');
+  assert.equal(A.refineInfo.right, null, 'A must not see past B');
+  assert.deepEqual(A.refineInfo.blocked, { left: false, right: true });
+  near(A.x, inkEnd(left) + SPACE, 0.01, 'A left edge from "for"');
+  near(A.x + A.w, 200, 0.01, 'A right edge unchanged');
+
+  assert.equal(B.refineInfo.left, null, 'B must not see past A');
+  assert.equal(B.refineInfo.right.token, 'traveling');
+  assert.deepEqual(B.refineInfo.blocked, { left: true, right: false });
+  near(B.x, 210, 0.01, 'B left edge unchanged');
+  near(B.x + B.w, 290 - SPACE, 0.01, 'B right edge from "traveling"');
+
+  // The two bars stay disjoint — neither covers the other.
+  assert.ok(A.x + A.w <= B.x, `bars overlap: A ends ${A.x + A.w}, B starts ${B.x}`);
+});
+
+test('a word between the bar and its sibling is still a neighbour', async () => {
+  // "[A] and [B] had" — the "and" sits between the two bars and is legitimate
+  // evidence for A's right edge and B's left edge.
+  reset();
+  const mid = span({ text: 'and', x: 210, w: widthPx('and', 12), baseCharPositions: charsFor('and'), lineId: 'L' });
+  const tail = span({ text: 'had', x: 330, w: widthPx('had', 12), baseCharPositions: charsFor('had'), lineId: 'L' });
+  const A = redaction(130, 200); A.lineId = 'L';
+  const B = redaction(260, 320); B.lineId = 'L';
+  utbState.boxes.push(mid, tail, A, B);
+
+  await R.refineRedaction(A);
+  await R.refineRedaction(B);
+  assert.equal(A.refineInfo.right.token, 'and');
+  near(A.x + A.w, 210 - SPACE, 0.01, 'A right edge from "and"');
+  assert.equal(B.refineInfo.left.token, 'and');
+  near(B.x, inkEnd(mid) + SPACE, 0.01, 'B left edge from "and"');
+  assert.ok(A.x + A.w <= B.x, 'still disjoint');
+});
+
+test('a comma the sibling\'s painted edge runs into is still this bar\'s neighbour', async () => {
+  // "[A], [B]" — the detector's box for A ends a pixel into the comma. B,
+  // refined first, must still see the comma (its centre stands clear of A).
+  reset();
+  const comma = span({ text: ',', x: 200, w: widthPx(',', 12), baseCharPositions: charsFor(','), lineId: 'L' });
+  const tail = span({ text: 'and', x: 290, w: widthPx('and', 12), baseCharPositions: charsFor('and'), lineId: 'L' });
+  const head = span({ text: 'for', x: 60, w: widthPx('for', 12), baseCharPositions: charsFor('for'), lineId: 'L' });
+  const A = redaction(100, 201); A.lineId = 'L';
+  const B = redaction(208, 280); B.lineId = 'L';
+  utbState.boxes.push(head, comma, tail, A, B);
+
+  await R.refineRedaction(B);
+  assert.equal(B.refineInfo.left && B.refineInfo.left.token, ',', 'B reads the comma');
+  assert.equal(B.refineInfo.left.reason, 'spaced');
+  near(B.x, 200 + widthPx(',', 12) + SPACE, 0.01, 'B left edge = comma + space');
+  await R.refineRedaction(A);
+  assert.equal(A.refineInfo.right.token, ',');
+  near(A.x + A.w, 200, 0.01, 'A abuts the comma');
+});
+
+test('refineAllRedactions settles siblings in reading order, whatever their creation order', async () => {
+  reset();
+  const comma = span({ text: ',', x: 200, w: widthPx(',', 12), baseCharPositions: charsFor(','), lineId: 'L' });
+  const tail = span({ text: 'and', x: 290, w: widthPx('and', 12), baseCharPositions: charsFor('and'), lineId: 'L' });
+  const head = span({ text: 'for', x: 60, w: widthPx('for', 12), baseCharPositions: charsFor('for'), lineId: 'L' });
+  const B = redaction(208, 280); B.lineId = 'L';      // created first
+  const A = redaction(100, 202); A.lineId = 'L';      // two px into the comma
+  utbState.boxes.push(head, comma, tail, B, A);
+  const before = widthsRecalcs;
+  await R.refineAllRedactions();
+  assert.equal(A.refineInfo.right.token, ',');
+  assert.equal(B.refineInfo.left && B.refineInfo.left.token, ',');
+  assert.ok(A.x + A.w <= B.x, 'disjoint');
+  assert.equal(widthsRecalcs, before + 1, 'one re-measure for the whole run');
+});
+
+test('a lone bar records what bounds it', async () => {
+  reset();
+  const head = span({ text: 'for', x: 60, w: widthPx('for', 12), baseCharPositions: charsFor('for'), lineId: 'L' });
+  const A = redaction(100, 200); A.lineId = 'L';
+  const B = redaction(204, 260); B.lineId = 'L';      // nothing but A on its row
+  utbState.boxes.push(head, A, B);
+  assert.equal(await R.refineRedaction(B), false);
+  assert.deepEqual(B.refineInfo.blocked, { left: true, right: false });
+  assert.equal(B.refineInfo.left, null);
+  assert.equal(B.refineInfo.right, null);
+  assert.equal(B.refineInfo.exact, false);
+  const alone = redaction(100, 200, 300);
+  utbState.boxes.push(alone);
+  assert.equal(await R.refineRedaction(alone), false);
+  assert.deepEqual(alone.refineInfo.blocked, { left: false, right: false });
+});
+
+test('a comma the bar covers most of is still the neighbour — and the edge is not exact', async () => {
+  // "[Lesley Groff,] Jean" — the redactor's box ran 2.75 px over the comma;
+  // the reader still certified it. It is the visible text's comma, so the
+  // bar ends at its pen; but a pen read from a sliver is not lattice-exact.
+  reset();
+  const ocr = (f) => span({ type: 'ocr', ocr: { clean: true }, ...f });
+  const head = ocr({ text: ',', x: 280.25, w: widthPx(',', 12), baseCharPositions: charsFor(',') });
+  const comma = ocr({ text: ',', x: 365.25, w: 4, baseCharPositions: [{ c: ',', x: 0, w: 4 }] });
+  const jean = ocr({ text: 'Jean', x: 372.75, w: widthPx('Jean', 12), baseCharPositions: charsFor('Jean') });
+  const box = redaction(285, 368);
+  utbState.boxes.push(head, comma, jean, box);
+  await R.refineRedaction(box);
+  assert.equal(box.refineInfo.right.token, ',');
+  assert.equal(box.refineInfo.right.reason, 'abuts');
+  assert.equal(box.refineInfo.right.partial, true);
+  assert.equal(box.refineInfo.left.partial, false);
+  near(box.x + box.w, 365.25, 0.01, 'bar ends at the comma\'s pen');
+  assert.equal(box.refineInfo.exact, false, 'a sliver pen is not exact');
+  // Covered whole, the comma is hidden text and the next word out is the neighbour.
+  reset();
+  const box2 = redaction(285, 370);
+  utbState.boxes.push(head, comma, jean, box2);
+  await R.refineRedaction(box2);
+  assert.equal(box2.refineInfo.right.token, 'Jean');
+  // A comma the bar's edge merely touches (1.5 px, bearing + a detector column) is exact.
+  reset();
+  const comma3 = ocr({ text: ',', x: 472.5, w: 4, baseCharPositions: [{ c: ',', x: 0, w: 4 }] });
+  const head3 = ocr({ text: ',', x: 384.75, w: 4, baseCharPositions: [{ c: ',', x: 0, w: 4 }] });
+  const box3 = redaction(392, 474);
+  utbState.boxes.push(head3, comma3, box3);
+  await R.refineRedaction(box3);
+  assert.equal(box3.refineInfo.right.partial, false);
+  assert.equal(box3.refineInfo.exact, true);
+});
+
+test('siblingBars sees only bars sharing the row', () => {
+  reset();
+  const A = redaction(130, 200, 0);
+  const sameRow = redaction(210, 280, 0);
+  const otherRow = redaction(210, 280, 100);
+  const notABar = span({ text: 'x', x: 210, y: 0, w: 10 });
+  utbState.boxes.push(A, sameRow, otherRow, notABar);
+  const ids = R.siblingBars(A).map((b) => b.id);
+  assert.deepEqual(ids, [sameRow.id]);
+});
+
 test('a bar the user moved is kept unless better evidence (OCR) arrives', async () => {
   reset();
   const left = span({ text: 'including', x: 100, w: widthPx('including', 12), baseCharPositions: charsFor('including'), lineId: 'L' });

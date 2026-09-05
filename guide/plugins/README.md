@@ -60,7 +60,7 @@ anything to work on.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar (name format, starts-with / ends-with filter, matches table). Names that tie on width are all listed — click one or press `[` / `]` to choose the bar's label | *(none — fully client-side)* |
+| `redaction_matching` | [redaction-matching/](redaction-matching/) | Candidate-name → redaction-bar width matching in the bar's own face; owns the candidates sidebar (name format, starts-with / ends-with filter, matches table). Names that tie on width are all listed — click one or press `[` / `]` to choose the bar's label; page-pixel verdicts (`✓ ✗ –`) rank them when a hypothesis tester is present. Two bars that are one name (a space apart, or split over a line break) are read as one person: first name on one bar, last name on the other | *(none — fully client-side)* |
 
 ## Redaction refiner
 

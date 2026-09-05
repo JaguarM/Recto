@@ -18,9 +18,12 @@ class RedactionMatchingTool(PDFTool):
     styles = [{'path': 'redaction_matching/styles.css'}]
     toolbar_button = 'redaction_matching/toolbar_button.html'
     sidebar = 'redaction_matching/sidebar_tools.html'
-    # v=15 — pen-exact width: a bar a refiner rebuilt from OCR pens on both
-    # sides matches names to ¼ px instead of the pixel tolerance; page-pixel
-    # verdicts (✓ ✗ –) from an optional window.ocrTestHypothesis seam rank the
-    # chips. Bump on every change: the version is the cache key, and a stale v=
-    # will serve the browser's old copy.
-    scripts_before_viewer = [{'path': 'redaction_matching/api.js', 'version': 'v=15'}]
+    # v=16 — two bars, one name: a bar whose only company on one side is
+    # another bar (a refiner's refineInfo.blocked), or the last bar of a line
+    # followed by the first of the next, is read together with it as one
+    # person — first name on one bar, last name on the other, each judged on
+    # its own bar. Candidate widths are measured in the bar's own face
+    # (adopted from its text line) through the font catalogue. Bump on every
+    # change: the version is the cache key, and a stale v= will serve the
+    # browser's old copy.
+    scripts_before_viewer = [{'path': 'redaction_matching/api.js', 'version': 'v=16'}]

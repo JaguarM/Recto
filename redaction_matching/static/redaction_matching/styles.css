@@ -605,3 +605,11 @@ td[data-name] { cursor: pointer; }
 .match-chip.verdict-contradicted:hover { text-decoration: none; }
 .match-tol { display: block; margin-top: 3px; font-size: 10px; color: #5f6368; }
 .match-loose { font-size: 10px; color: #f28b82; margin-bottom: 3px; }
+
+/* Two bars, one name: a pair reading shows this bar's half (dashed), and the
+   row says which bar holds the other half */
+.match-chip.pair { border-style: dashed; border-color: rgba(129, 201, 149, 0.5); }
+.match-chip.pair.active { border-style: solid; }
+.match-link { font-size: 10px; color: #8ab4f8; margin-bottom: 3px; }
+/* A near miss the page pixels vouch for (outside the pen lattice) */
+.match-chip.near { border-style: dotted; border-color: rgba(129, 201, 149, 0.5); }

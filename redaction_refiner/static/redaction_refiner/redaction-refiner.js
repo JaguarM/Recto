@@ -6,7 +6,9 @@
 //   • Build the row's words from the embedded/OCR spans sharing the bar's line
 //     (per-character positions when the span has them, so a text-layer span
 //     that still runs UNDER the bar contributes only its visible words), and
-//     take the nearest word left and right of the bar. A single capital letter
+//     take the nearest word left and right of the bar — but never look past
+//     another redaction bar on the same row, or the pair would each stretch
+//     across the other and collapse onto one span. A single capital letter
 //     touching the bar is a sliver of the hidden name the bar failed to cover
 //     (OCR reads the exposed "S" of "SARAH"): it is part of the redaction, so
 //     the bar grows over it and the next word out is the neighbour.
@@ -80,6 +82,7 @@
   // join the bracket classes rather than falling through to the word rule,
   // which would put a phantom space inside each bracket.
   const PUNCT_RE     = /[\p{P}<>]/u;
+  const PUNCT_ONLY_RE = /^[\p{P}<>]+$/u;
   const PUNCT_CLOSE  = /[.,;:!?)\]}»”…%>]/u;
   const PUNCT_OPEN   = /[([{«“¿¡<]/u;
   const PUNCT_MEDIAL = /[-–—/\\@&_~]/u;
@@ -92,6 +95,12 @@
   // A refined bar narrower than this would be a degenerate zero-width box.
   const MIN_REFINED_WIDTH_PX = 4;
 
+  // A neighbour whose glyphs run further than this under the bar was read
+  // from a sliver: its pen is evidence, but not lattice-exact. (A detector
+  // column plus a glyph's side bearing is under 2 px; a comma the redactor's
+  // box ran over is 2.75 px under on the reference page.)
+  const PARTIAL_UNDER_PX = 2;
+
   // How far the missing letters of a fragment may sit from where the geometry
   // says they should be (relative to a space, with an absolute floor).
   const TOUCH_TOL_FRAC = 0.6;
@@ -99,6 +108,11 @@
 
   // How many dictionary completions of a fragment are measured before giving up.
   const MAX_COMPLETIONS = 12;
+
+  // A bar bounded by a sibling measures against the sibling's CURRENT edge,
+  // which may itself move when the sibling is refined; a full run repeats
+  // until a pass moves nothing (a settled bar costs a signature compare).
+  const MAX_REFINE_PASSES = 3;
 
   // A row counts as justified when its median measured space exceeds the font's
   // natural advance by more than this (relative, with an absolute floor).
@@ -294,6 +308,22 @@
     });
   }
 
+  // Other redaction bars sharing this bar's row. Two bars separated by a space
+  // are usually the two halves of one name, and either way the text BEYOND a
+  // sibling says nothing about this bar's extent: measuring against it would
+  // stretch this bar across the sibling, and — since the sibling does the same
+  // in reverse — collapse the pair onto one span, scoring the same stretch of
+  // page twice. So a sibling bounds the neighbour search on its side, and an
+  // edge with no word between it and the sibling keeps its detected position:
+  // there, the painted ink is the only evidence there is.
+  function siblingBars(box) {
+    return utbState.boxes.filter((b) => {
+      if (b.id === box.id || b.type !== 'redaction' || b.page !== box.page) return false;
+      const overlap = Math.min(box.y + box.h, b.y + b.h) - Math.max(box.y, b.y);
+      return overlap >= box.h * 0.5;
+    });
+  }
+
   // The text-line spans the box is measured against, and where they came from.
   //
   // OCR words are preferred whenever OCR has read this row: OCR reads the glyphs
@@ -365,22 +395,46 @@
     const words = rowWords(spans);
     const centre = box.x + box.w / 2;
     const remnants = [];
+
+    // How far out each side may look before it runs into another bar.
+    const tol = TOUCH_TOL_MIN_PX;
+    let leftLimit = -Infinity;
+    let rightLimit = Infinity;
+    for (const b of siblingBars(box)) {
+      const bx1 = b.x + b.w;
+      if (bx1 <= box.x + tol) leftLimit = Math.max(leftLimit, bx1);
+      if (b.x >= box.x + box.w - tol) rightLimit = Math.min(rightLimit, b.x);
+    }
+    const blocked = { left: leftLimit > -Infinity, right: rightLimit < Infinity };
+
     let left = null;
     let right = null;
     for (const w of words) {
       const wCentre = (w.x0 + w.x1) / 2;
       const side = wCentre <= centre ? 'left' : 'right';
+      // Behind a sibling bar — that text belongs to the sibling, not to us.
+      // Judged by the word's centre: a comma the sibling's painted edge runs
+      // a pixel into ("[A], [B]") still stands between the bars, and is B's
+      // neighbour as much as A's.
+      if (side === 'left' ? wCentre <= leftLimit : wCentre >= rightLimit) continue;
       if (isRemnant(w, box, side)) { remnants.push({ text: w.text, side }); continue; }
       const width = w.x1 - w.x0;
       const under = Math.min(w.x1, box.x + box.w) - Math.max(w.x0, box.x);
-      if (width > 0 && under > width * 0.5) continue;
+      // Text lying mostly under the bar is the redacted text itself. A
+      // punctuation mark is the exception: the redactor's box often runs over
+      // the comma after a name ("[Lesley Groff,] Jean"), and a mark the reader
+      // still saw part of belongs to the visible text — it is the neighbour,
+      // partly covered — until it is covered whole.
+      const punctOnly = PUNCT_ONLY_RE.test(w.text);
+      if (width > 0 && (punctOnly ? under >= width - 0.5 : under > width * 0.5)) continue;
+      w.under = Math.max(0, under);
       if (side === 'left') {
         if (!left || w.x1 > left.x1) left = w;
       } else if (!right || w.x0 < right.x0) {
         right = w;
       }
     }
-    return { left, right, remnants, source, spans };
+    return { left, right, remnants, blocked, source, spans };
   }
 
   function median(nums) {
@@ -470,11 +524,13 @@
     const facing = side === 'left' ? run[run.length - 1] : run[0];
     const inkEdge = side === 'left' ? word.x1 : word.x0;
     const token = facingToken(text, side);
+    // Read from a sliver (the bar covers part of it): evidence, not exact.
+    const partial = (word.under || 0) > PARTIAL_UNDER_PX;
 
     if (isPunct(facing)) {
       if (punctBindsToward(run, side)) {
         return { edge: inkEdge, wordEdge: inkEdge, kind: 'punct', reason: 'abuts',
-                 token: facing, inkEdge, space: 0 };
+                 token: facing, inkEdge, space: 0, partial };
       }
       // The mark belongs to the text behind it, so a real space separates it
       // from the hidden word — sized like any other inter-word space on the row.
@@ -482,14 +538,14 @@
       const space = rowSpaceWidth(spans, natural);
       const edge = side === 'left' ? inkEdge + space : inkEdge - space;
       return { edge, wordEdge: edge, kind: 'punct', reason: 'spaced',
-               token: facing, inkEdge, space };
+               token: facing, inkEdge, space, partial };
     }
 
     const natural = await naturalSpaceWidth(word.span);
     const space = rowSpaceWidth(spans, natural);
     const wordEdge = side === 'left' ? inkEdge + space : inkEdge - space;
     const cls = classifyToken(token, side);
-    const base = { wordEdge, token, inkEdge, space, reason: cls.reason };
+    const base = { wordEdge, token, inkEdge, space, reason: cls.reason, partial };
 
     if (cls.kind !== 'fragment') return { ...base, edge: wordEdge, kind: 'word' };
 
@@ -518,7 +574,8 @@
   function signatureOf(nb) {
     const w = (x) => (x ? `${x.text}@${x.x0.toFixed(2)}-${x.x1.toFixed(2)}` : '-');
     const r = nb.remnants.map((x) => `${x.side[0]}:${x.text}`).join(',');
-    return `${nb.source}|${w(nb.left)}|${w(nb.right)}|${r}|${dict.list.length}`;
+    const b = `${nb.blocked.left ? 'L' : ''}${nb.blocked.right ? 'R' : ''}`;
+    return `${nb.source}|${w(nb.left)}|${w(nb.right)}|${r}|${b}|${dict.list.length}`;
   }
 
   // Refine one redaction box in place. Returns true when its geometry changed.
@@ -528,7 +585,16 @@
     await loadDictionary();
 
     const nb = neighboursFor(box);
-    if (!nb.left && !nb.right) return false;  // isolated bar — nothing to measure against
+    if (!nb.left && !nb.right) {
+      // Nothing to measure against. Still record what bounds the bar, so a
+      // consumer can tell a lone bar from one whose only company on the row
+      // is another bar — the other half of a name.
+      box.refineInfo = {
+        source: nb.source, left: null, right: null, remnants: nb.remnants, blocked: nb.blocked,
+        x: box.x, w: box.w, exact: false,
+      };
+      return false;
+    }
 
     const sig = signatureOf(nb);
     const prev = box._refine;
@@ -564,9 +630,12 @@
     // guide/plugins/redaction-refiner/pixel-evidence-plan.md §0). `x`/`w` are
     // the geometry this verdict produced; a bar moved since is no longer exact.
     box.refineInfo = {
-      source: nb.source, left, right, remnants: nb.remnants,
+      source: nb.source, left, right, remnants: nb.remnants, blocked: nb.blocked,
       x: box.x, w: box.w,
-      exact: nb.source === 'ocr' && !!left && !!right,
+      // An edge bounded by a sibling bar is the detector's, not a reader pen,
+      // so a pair-adjacent bar is never lattice-exact; nor is an edge read
+      // from a neighbour the bar partly covers.
+      exact: nb.source === 'ocr' && !!left && !!right && !left.partial && !right.partial,
     };
     box._refine = { sig, source: nb.source, x: box.x, w: box.w };
     if (changed && typeof renderBox === 'function') renderBox(box);
@@ -581,18 +650,29 @@
   }
 
   // Refine every eligible redaction box, then re-measure candidate widths once.
+  // Bars are visited in reading order and the run repeats while a pass moves
+  // anything: a bar's neighbour search is bounded by its siblings' edges, and
+  // a sibling refined later would leave the earlier bar judged against a
+  // detected edge that has since moved (the pair "[A], [B]" visited B-first
+  // used to lose B's comma behind A's painted edge).
   async function refineAllRedactions(opts = {}) {
     if (typeof utbState === 'undefined') return;
-    const boxes = utbState.boxes.filter((b) => b.type === 'redaction');
+    const boxes = utbState.boxes.filter((b) => b.type === 'redaction')
+      .sort((a, b) => a.page - b.page || a.y - b.y || a.x - b.x);
     let changed = false;
-    for (const box of boxes) {
-      // Don't fight a box the user is actively editing/selecting.
-      if (utbState.selectedId === box.id || utbState.editingId === box.id) continue;
-      try {
-        if (await refineRedaction(box, opts)) changed = true;
-      } catch (e) {
-        console.warn('[redaction_refiner] refine failed for', box.id, e);
+    for (let pass = 0; pass < MAX_REFINE_PASSES; pass++) {
+      let moved = false;
+      for (const box of boxes) {
+        // Don't fight a box the user is actively editing/selecting.
+        if (utbState.selectedId === box.id || utbState.editingId === box.id) continue;
+        try {
+          if (await refineRedaction(box, opts)) moved = true;
+        } catch (e) {
+          console.warn('[redaction_refiner] refine failed for', box.id, e);
+        }
       }
+      if (!moved) break;
+      changed = true;
     }
     // Widths depend on box.w — recompute matches for the redrawn bars.
     if (changed && typeof calculateAllWidths === 'function') calculateAllWidths();
@@ -610,6 +690,7 @@
   window.RedactionRefiner = {
     setDictionary, loadDictionary, isWord, completions, hiddenPart, facingToken,
     caseOf, classifyToken, rowWords, neighboursFor, isRemnant, rowSpaceWidth, resolveEdge,
+    siblingBars,
     facingRun, punctBindsToward,
     refineRedaction, refineAllRedactions,
   };

@@ -1,0 +1,138 @@
+# Redaction Matching — `redaction_matching`
+
+Matches candidate names against redaction bars by **measured width**, and
+shows the result on the bar and in the *All Matches* table. It owns the
+candidates right panel (the `#tools-sidebar` host, its toolbar toggle, CSS and
+wiring), the name pool (`static/redaction_matching/names.json` + custom names),
+the per-box *Name format* settings, and the matches table. It does **not**
+detect bars — it matches against whatever `redaction` boxes exist (from
+`ocr_tool`, or the Add-Box tool).
+
+## Candidates
+
+Each redaction box carries its own `nameSettings` (a copy of the template
+edited while no box is selected): *Generate* full name / first only / last only,
+*Include* prefix / suffix / nickname, *Expand aliases* (every first / last
+spelling a person has), and a *starts with* / *ends with* letter filter (one
+or more letters, case-insensitive, applied to the rendered candidate string). A
+refiner that finds a letter of the hidden name sticking out of the bar fills
+the filter for that box through the `redaction:refined` event, unless the user
+typed one. Custom names (typed or pasted) are shared by every box; deleting a
+row deletes the whole person from every box.
+
+Widths come from the HarfBuzz `/widths` endpoint, measured in the **bar's own
+face, size and style** — a detected bar adopts them from the text line it is
+connected to (`embedded_text_viewer`'s connect step prefers a reader-read
+line, whose size is measured from the glyphs, over the embedded layer's) —
+resolved through the font catalogue (`family` / `bold` / `italic`), with the
+bar's kerning, uppercase and space-width settings applied.
+
+## Which names fit
+
+A name fits when its measured width lies within the bar's **fit range**:
+
+- **Over** (wider than the bar): the tolerance in force. That is the *Tolerance*
+  field, unless a refiner has marked the bar **pen-exact** — both edges derived
+  from the reader's ¼-px OCR pens (`box.refineInfo.exact`, and the bar not
+  moved since) — in which case it is `±0.3 px`, two ⅛-px lattice snaps; a
+  tighter field still wins. The row shows which (`±0.30 px · pens` / `±3 px`).
+- **Under** (narrower than the bar): the same, unless an edge is the
+  **detector's** — no reader pen on that side (a line end, a bar bounded by a
+  sibling bar, or no refiner at all) — in which case the bar ends where the
+  black box ends, and the redactor drew that box with room to spare (4.4 px
+  past *BLEDSOE* on the reference page). Then a name may be narrower by up to
+  0.4 em, capped at 10 px.
+
+Names are listed best first: by **page verdict** when a hypothesis tester
+scored them (below), then a pair reading before a single one, then a fit
+before a near miss, then closeness. In Times many names tie to the font unit
+(`SARAH KELLEN` 15416/2048 em, `JUSTIN NELSON` 15417), so this is a list, not
+a winner: click a chip to pin that name on the bar, or press `[` / `]` with
+the bar selected.
+
+**Near misses.** Names the pen lattice excludes but the pixel tolerance admits
+are not thrown away. With a hypothesis tester present they are scored too, and
+one the page **could not contradict** joins the list (dotted chip, the title
+says so) — width ranks, the page decides. On the reference page *RICHARD
+BARNETT* measures 0.51 px short of its pen-exact bar and is consistent.
+Without a tester they are the fallback when nothing fits at all, shown under a
+red *No name fits the pen-exact width* note as near misses, never as fits.
+
+## Page-pixel verdicts
+
+If `window.ocrTestHypothesis(box, name)` exists (`ocr_tool` defines it over
+tol0's `engine/hypothesis.js`), every name a reading shows on a bar is tested
+after each width recompute and the chip carries the verdict: `✓` consistent,
+`✗` contradicted, `–` no evidence; the row counts `n of m consistent`. The
+seam draws the name where the refiner put the bar and lets the page bytes
+outside the bar's body judge it; two consistent names are a tie. Without a
+provider nothing runs. Design and limits:
+[../redaction-refiner/pixel-evidence-plan.md](../redaction-refiner/pixel-evidence-plan.md).
+
+## Two bars, one name
+
+A name can be redacted as two bars — its halves a space apart on one row
+(`[Nadia] [Marcinkova]`), or split by a line break (`…, [Nadia]` ending one
+row and `[Marcinkova], …` opening the next). The refiner's verdict on each bar
+tells the cases apart without new geometry:
+
+- **row** — `refineInfo.blocked` says a sibling bar bounded the neighbour
+  search on that side and no neighbour was found there: nothing but the other
+  bar. The two must be within 0.75 em of each other. A word between them
+  (`[A] and [B]`, `[A], [B]`) keeps them apart.
+- **line** — the last bar of a row (no word and no bar after it) and the first
+  bar of the next row (nothing before it), the next row starting between 0.5
+  and 1.8 bar heights down.
+
+Linked bars are read as **one person**: a first name against the first bar and
+a last name against the second, each within its own fit range — the same
+strings the *First only* / *Last only* formats generate, constrained to come
+from one person (a custom name splits at its last space; prefix and suffix
+follow the *Include* settings of the bar they land on). The gap between the
+bars is detector ink, not a measured pen, so the halves are never summed
+across it. A **pair reading** appears as a dashed chip showing this bar's half
+(`Nadia` on one bar, `Marcinkova` on the other; the title names the whole
+person and the partner bar), the row says which bar holds the other half, and
+clicking it labels both bars. Each half is judged on its own bar by the
+hypothesis tester: contradicted anywhere is contradicted, consistent on both
+is consistent, otherwise no evidence. A bar without a refiner verdict is never
+linked. (`[Bledsoe] [is a]` on the reference page links too — and yields no
+pair, because no person's last name is 22 px wide.)
+
+## How it attaches
+
+- Reads `utbState.boxes` (text_tool) and writes `box.text` / `box.labelText`,
+  `box.widths`, `box.verdicts`, `box.matchPick`, `box.nameSettings`,
+  `box.candidates`.
+- Listens to **`redaction:refined`** (remnant letters → letter filter).
+- Reads **`box.refineInfo`** (`exact`, `left` / `right`, `blocked`) when a
+  refiner wrote it; without one every bar is a raster bar with detector edges.
+- Calls **`window.ocrTestHypothesis`** when defined; **`getNaturalSpaceWidth`**,
+  **`renderBox`**, **`GEO`**, **`selectBoxInSVG`** / **`syncToolbarToBox`**
+  through guards.
+- Globals it exposes: `getBoxMatchInfo`, `getBoxMatches`, `fitRange`,
+  `effectiveTolerance`, `linkFor`, `halfStrings`, `scoreMatches`,
+  `shownMatch`, `setBoxMatch`, `cycleBoxMatch`, `matchesLetterFilter`,
+  `calculateWidthsForRedaction`, `calculateAllWidths`, `selectRedaction`.
+
+## Tests
+
+`python manage.py test redaction_matching`: registration, the rendered sidebar
+controls, the script's cache-busting version, and — through Node, skipped
+when `node` is absent — `tests_js/matching.test.mjs`: the fit ranges (pixel
+tolerance, the pen lattice, the detector padding), the loose fallback, the
+near-miss rescue, verdict ranking, the letter filter, and the two-bar
+readings (row and line links, the one-person constraint, settings shaping
+the halves, pinning both bars, halves judged separately).
+
+## Dependencies
+
+```
+redaction_matching ──utbState / renderBox / GEO / getNaturalSpaceWidth──> text_tool ──> pdf_core
+                   ──'redaction:refined', box.refineInfo (optional)─────> a refiner
+                   ──window.ocrTestHypothesis (optional)────────────────> a hypothesis tester
+```
+
+Removing it: delete `redaction_matching/` and this docs folder, and drop its
+row from [`../README.md`](../README.md). `manage.py check` stays clean and no
+candidates sidebar remains in the page.

@@ -559,7 +559,12 @@
       }
 
       const candidates = getBoxCandidates(box);
-      if (candidates.length === 0) {
+      // A bar that forms a name with another bar (linkFor) also needs its own
+      // half of every person measured — the first names, or the last names —
+      // so the pair readings can be judged bar by bar.
+      const link = linkFor(box);
+      const strings = [...new Set([...candidates, ...(link ? halfStrings(box, link) : [])])];
+      if (strings.length === 0) {
         box.widths = {};
         if (utbState.selectedId === boxId) {
             renderCandidates();
@@ -575,7 +580,6 @@
       // SVG <text> node reports fallback-font metrics, so the same name measured
       // a few px wider on some app restarts than on others. HarfBuzz reads the
       // true font metrics identically every run.
-      const font  = fontFamilyToTtf(box.fontFamily);
       const size  = box.sizePt;          // POINTS — the backend applies the DPI scale itself
       const scale = GEO.docScale();      // px-per-pt × 100 for this document
 
@@ -590,8 +594,13 @@
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            strings: candidates,
-            font, size, scale,
+            strings,
+            // The bar's face is its text line's (adopted when the bar was
+            // connected to the line), resolved through the font catalogue.
+            family: box.fontFamily,
+            bold: !!box.bold,
+            italic: !!box.italic,
+            size, scale,
             kerning: box.kerning,
             force_uppercase: box.uppercase,
             space_width: manualSpace ? box.spaceWidth : null,
@@ -603,7 +612,7 @@
           // letter-spacing (rare on redactions) adds a fixed advance between
           // every pair of glyphs; the shaper doesn't model it, so fold it in.
           const lsPx = box.letterSpacing ? box.letterSpacing * GEO.docPtToPx(box.sizePt) : 0;
-          candidates.forEach((c, i) => {
+          strings.forEach((c, i) => {
             let w = results[i]?.width ?? 0;
             if (lsPx) {
               const disp = box.uppercase ? c.toUpperCase() : c;
@@ -617,10 +626,13 @@
       }
 
       await scoreMatches(box);
+      // The partner bar's pair readings depend on this bar's widths — judge
+      // them now that both halves are measured.
+      if (link && link.other.widths && Object.keys(link.other.widths).length) await scoreMatches(link.other);
 
       if (utbState.selectedId === boxId) {
           renderCandidates();
-          updateAllMatchesView(boxId);
+          updateAllMatchesView(link ? null : boxId);
       }
     }
 
@@ -668,8 +680,9 @@
       if (btnPrev) btnPrev.disabled = state.page <= 1;
       if (btnNext) btnNext.disabled = state.page >= totalPages;
 
-      const matches = box ? getBoxMatches(box) : [];
-      const shown = box ? shownMatch(box, matches).name : null;
+      const info = box ? getBoxMatchInfo(box) : { matches: [], entries: [] };
+      const matches = info.matches;
+      const shown = box ? shownMatch(box, info.entries).name : null;
       els.tableBody.innerHTML = slice.map(n => {
         const w = box ? box.widths[n] : undefined;
         const isMatch = matches.includes(n);
@@ -773,28 +786,217 @@
     }
     window.effectiveTolerance = effectiveTolerance;
 
+    // How much narrower (`under`) and wider (`over`) than the bar a name may
+    // measure and still fit. `over` is the tolerance in force. `under` grows
+    // to the redactor's padding when an edge is the detector's: with no
+    // reader pen on that side the bar ends where the black box ends, and the
+    // box was drawn with room to spare (4.4 px past BLEDSOE on the reference
+    // page). The padding is the redaction tool's, a few pixels, so it is
+    // taken as a fraction of the size with a cap. Without a refiner every
+    // edge is the detector's.
+    const DETECTOR_PAD_EM = 0.4;
+    const DETECTOR_PAD_MAX_PX = 10;
+    function fitRange(box) {
+      const over = effectiveTolerance(box);
+      const i = box.refineInfo;
+      const detectorEdge = !i || !i.left || !i.right;
+      const pad = Math.min(DETECTOR_PAD_MAX_PX, DETECTOR_PAD_EM * emPx(box));
+      return { over, under: detectorEdge ? Math.max(over, pad) : over };
+    }
+    window.fitRange = fitRange;
+    const fitsRange = (r, d) => d <= r.over && -d <= r.under;   // d = measured − bar
+
     // Page-pixel verdicts, ranked: a name the page could not contradict first,
     // one the bar left no evidence for next, a contradicted one last.
     const VERDICT_RANK = { consistent: 0, 'no-evidence': 1, contradicted: 2 };
     const verdictOf = (box, name) => box.verdicts?.[name]?.verdict || null;
-    const verdictRank = (box, name) => VERDICT_RANK[verdictOf(box, name)] ?? 1;
 
-    /** Candidates whose measured width fits the box, best first: by page
-     *  verdict when a hypothesis tester scored them, then by closeness. In
-     *  Times many names share a width to the font unit ("SARAH KELLEN"
-     *  15416/2048 em, "JUSTIN NELSON" 15417), so this is a list, not a winner.
-     *  Returns { matches, tol, loose }: when nothing fits the pen-exact width,
-     *  the nearest names within the user's pixel tolerance are returned with
-     *  loose = true so they stay visible — as near misses, never as fits. */
+    // ── Two bars, one name ────────────────────────────────────
+    // A name can be redacted as two bars: its halves a space apart on one row
+    // ("[Nadia] [Marcinkova]"), or split by a line break ("…, [Nadia]" ending
+    // one row and "[Marcinkova], …" opening the next). A refiner's verdict on
+    // each bar (box.refineInfo) tells the two cases apart without any new
+    // geometry: `blocked` says a sibling bar bounded the neighbour search on
+    // that side, and no neighbour there means nothing but the sibling — the
+    // row case; the line case is the last bar of a row (no word and no bar
+    // after it) followed by the first bar of the next row (nothing before it).
+    // Either way the two bars are read as ONE person: a first name against
+    // the first bar and a last name against the second, each within its own
+    // tolerance. The gap between the bars is detector ink, not a measured
+    // pen, so the halves are never summed across it. Pair readings sit beside
+    // the single-name readings in the list, and picking one pins both halves.
+    // Without a refiner no bar carries a verdict and no bar is ever linked.
+    const LINK_ROW_GAP_EM = 0.75;          // a same-row pair is at most this far apart
+    const LINK_LINE_PITCH = [0.5, 1.8];    // the next row starts this many bar heights down
+
+    function emPx(box) {
+      const pxPerPt = (typeof GEO !== 'undefined' && typeof GEO.docPxPerPt === 'function') ? GEO.docPxPerPt() : 96 / 72;
+      return (box.sizePt || 12) * pxPerPt;
+    }
+    function sameRow(a, b) {
+      const overlap = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y);
+      return overlap >= Math.min(a.h, b.h) * 0.5;
+    }
+    // Is b on the row right after a's, starting further left than a ends?
+    function nextRow(a, b) {
+      const dy = b.y - a.y;
+      return dy >= LINK_LINE_PITCH[0] * a.h && dy <= LINK_LINE_PITCH[1] * a.h && b.x < a.x + a.w;
+    }
+    // A bar with nothing readable on `side`: no word and no sibling bar.
+    const openSide = (b, side) => !!b.refineInfo && !b.refineInfo[side] && !b.refineInfo.blocked?.[side];
+    // A bar whose only company on `side` is a sibling bar.
+    const barSide = (b, side) => !!b.refineInfo && !b.refineInfo[side] && !!b.refineInfo.blocked?.[side];
+
+    /** The bar this one forms a name with — { other, role, kind } or null.
+     *  `role` is this bar's half ('first' | 'last'); `kind` is 'row' (a space
+     *  apart) or 'line' (split over a line break). */
+    function linkFor(box) {
+      if (!box.refineInfo) return null;
+      const bars = getRedactionBoxes().filter(b => b.id !== box.id && b.page === box.page && b.refineInfo);
+      const maxGap = LINK_ROW_GAP_EM * emPx(box);
+      if (barSide(box, 'right')) {
+        const right = bars.filter(b => sameRow(box, b) && b.x >= box.x + box.w - 2.5).sort((p, q) => p.x - q.x)[0];
+        if (right && right.x - (box.x + box.w) <= maxGap && barSide(right, 'left')) return { other: right, role: 'first', kind: 'row' };
+      }
+      if (barSide(box, 'left')) {
+        const left = bars.filter(b => sameRow(box, b) && b.x + b.w <= box.x + 2.5).sort((p, q) => q.x - p.x)[0];
+        if (left && box.x - (left.x + left.w) <= maxGap && barSide(left, 'right')) return { other: left, role: 'last', kind: 'row' };
+      }
+      if (openSide(box, 'right')) {
+        const next = bars.filter(b => nextRow(box, b) && openSide(b, 'left')).sort((p, q) => p.x - q.x)[0];
+        if (next) return { other: next, role: 'first', kind: 'line' };
+      }
+      if (openSide(box, 'left')) {
+        const prev = bars.filter(b => nextRow(b, box) && openSide(b, 'right')).sort((p, q) => q.x - p.x)[0];
+        if (prev) return { other: prev, role: 'last', kind: 'line' };
+      }
+      return null;
+    }
+    window.linkFor = linkFor;
+
+    // Every person as the (first, last) split the two bars could show — the
+    // first bar's settings shape the first half (aliases, prefix, its letter
+    // filter), the second bar's the last half. The same strings the First
+    // only / Last only formats generate, constrained to come from ONE person.
+    // A custom name splits at its last space.
+    function pairPersons(A, B) {
+      const sA = ensureBoxNameSettings(A), sB = ensureBoxNameSettings(B);
+      const out = [];
+      const add = (first, last) => {
+        if (!first || !last) return;
+        if (!matchesLetterFilter(first, sA) || !matchesLetterFilter(last, sB)) return;
+        out.push({ first, last });
+      };
+      state.namesData.forEach((person, i) => {
+        if (state.excludedPersons.has(i)) return;
+        const firsts = sA.expandFirstAliases ? person.first : person.first.slice(0, 1);
+        const lasts = sB.expandLastAliases ? person.last : person.last.slice(0, 1);
+        const pre = sA.includePrefix && person.prefix ? person.prefix + ' ' : '';
+        const suf = sB.includeSuffix && person.suffix ? ' ' + person.suffix : '';
+        for (const f of firsts) for (const l of lasts) add(pre + f, l + suf);
+      });
+      for (const c of state.customCandidates) {
+        const m = /^(.+)\s+(\S+)$/.exec(c.trim());
+        if (m) add(m[1], m[2]);
+      }
+      return out;
+    }
+
+    /** The strings this bar has to have measured for its pair readings: its
+     *  own half of every person. */
+    function halfStrings(box, link) {
+      const A = link.role === 'first' ? box : link.other;
+      const B = link.role === 'first' ? link.other : box;
+      return [...new Set(pairPersons(A, B).map(p => link.role === 'first' ? p.first : p.last))];
+    }
+    window.halfStrings = halfStrings;
+
+    /** This bar's pair readings — persons whose first name fits the first bar
+     *  and whose last name fits the second — as entries showing this bar's
+     *  half. Empty until both bars have measured their halves. */
+    function pairReadings(box, link = linkFor(box)) {
+      if (!link) return [];
+      const A = link.role === 'first' ? box : link.other;
+      const B = link.role === 'first' ? link.other : box;
+      if (!ensureBoxNameSettings(A).generateFull) return [];   // a pair IS a full name
+      const rA = fitRange(A), rB = fitRange(B);
+      const seen = new Set();
+      const out = [];
+      for (const p of pairPersons(A, B)) {
+        const key = `pair:${p.first}|${p.last}`;
+        if (seen.has(key)) continue;
+        const wa = A.widths?.[p.first], wb = B.widths?.[p.last];
+        if (wa === undefined || wb === undefined) continue;
+        if (!fitsRange(rA, wa - A.w) || !fitsRange(rB, wb - B.w)) continue;
+        const da = Math.abs(wa - A.w), db = Math.abs(wb - B.w);
+        seen.add(key);
+        const mine = link.role === 'first';
+        out.push({
+          key, kind: 'pair', full: `${p.first} ${p.last}`, first: p.first, last: p.last,
+          name: mine ? p.first : p.last, partnerName: mine ? p.last : p.first,
+          partnerId: link.other.id, link: link.kind, diff: Math.max(da, db),
+        });
+      }
+      return out;
+    }
+
+    /** A reading's page verdict. A pair is judged on both bars: contradicted
+     *  anywhere is contradicted, consistent on both is consistent, otherwise
+     *  no evidence — null while neither half has been scored. */
+    function entryVerdict(box, e) {
+      if (e.kind !== 'pair') return verdictOf(box, e.name);
+      const other = typeof utbState !== 'undefined' ? utbState.getBox(e.partnerId) : null;
+      const a = verdictOf(box, e.name), b = other ? verdictOf(other, e.partnerName) : null;
+      if (a === 'contradicted' || b === 'contradicted') return 'contradicted';
+      if (a === 'consistent' && b === 'consistent') return 'consistent';
+      if (!a && !b) return null;
+      return 'no-evidence';
+    }
+
+    /** Candidates that fit the bar, best first: by page verdict when a
+     *  hypothesis tester scored them, then by closeness. In Times many names
+     *  share a width to the font unit ("SARAH KELLEN" 15416/2048 em, "JUSTIN
+     *  NELSON" 15417), so this is a list, not a winner. Returns
+     *  { entries, matches, tol, loose, link }: `entries` are the readings
+     *  ({ key, kind: 'single' | 'pair', name, full, diff, … }), `matches` the
+     *  names they show on this bar. When nothing fits the pen-exact width,
+     *  the nearest single names within the user's pixel tolerance are
+     *  returned with loose = true so they stay visible — as near misses,
+     *  never as fits. */
     function getBoxMatchInfo(box) {
-      const diff = c => Math.abs(box.widths[c] - candidateEW(box, c));
-      const within = tol => getBoxCandidates(box)
-        .filter(c => box.widths[c] !== undefined && diff(c) <= tol)
-        .sort((x, y) => (verdictRank(box, x) - verdictRank(box, y)) || (diff(x) - diff(y)));
-      const tol = effectiveTolerance(box);
-      const matches = within(tol);
-      if (matches.length || tol >= (box.tolerance ?? 3)) return { matches, tol, loose: false };
-      return { matches: within(box.tolerance ?? 3), tol: box.tolerance ?? 3, loose: true };
+      const d = c => box.widths[c] - candidateEW(box, c);
+      const entry = (c, near) => ({ key: c, kind: 'single', name: c, full: c, diff: Math.abs(d(c)), near });
+      const measured = getBoxCandidates(box).filter(c => box.widths[c] !== undefined);
+      const range = fitRange(box);
+      const link = linkFor(box);
+      const fits = [...measured.filter(c => fitsRange(range, d(c))).map(c => entry(c, false)), ...pairReadings(box, link)];
+      // Names the pen lattice excludes but the pixel tolerance admits. With a
+      // hypothesis tester they are scored too, and one the page could not
+      // contradict joins the list — width ranks, the page decides (a bar's
+      // pens can slip a lattice step: RICHARD BARNETT measures 0.51 px short
+      // of its bar on the reference page and is consistent). Without a
+      // tester they are the loose fallback when nothing fits.
+      const field = { over: box.tolerance ?? 3, under: Math.max(box.tolerance ?? 3, range.under) };
+      const near = range.over < field.over
+        ? measured.filter(c => !fitsRange(range, d(c)) && fitsRange(field, d(c))).map(c => entry(c, true))
+        : [];
+      // Order: page verdict; then a pair reading before a single one (it
+      // explains two bars with one person); then a fit before a near miss;
+      // then closeness.
+      const rank = e => VERDICT_RANK[entryVerdict(box, e)] ?? 1;
+      const best = (x, y) => (rank(x) - rank(y))
+        || ((x.kind === 'pair' ? 0 : 1) - (y.kind === 'pair' ? 0 : 1))
+        || ((x.near ? 1 : 0) - (y.near ? 1 : 0))
+        || (x.diff - y.diff);
+      let entries = [...fits, ...near.filter(e => entryVerdict(box, e) === 'consistent')].sort(best);
+      let tol = range.over;
+      let loose = false;
+      if (!entries.length && near.length) {
+        entries = near.sort(best);
+        tol = field.over;
+        loose = true;
+      }
+      return { entries, matches: entries.map(e => e.name), near, tol, loose, link };
     }
     window.getBoxMatchInfo = getBoxMatchInfo;
 
@@ -806,17 +1008,20 @@
     // ── Page-pixel verdicts (optional seam) ───────────────────
     // A hypothesis tester may define window.ocrTestHypothesis(box, name) →
     // { verdict: 'consistent' | 'contradicted' | 'no-evidence', open, edge,
-    //   unexplained, … } | null   (planned: ocr_tool over tol0's
-    // engine/hypothesis.js — guide/plugins/redaction-refiner/pixel-evidence-plan.md).
-    // It draws the name where the refiner put the bar and lets the page bytes
-    // outside the bar's body contradict it. Verdicts live on box.verdicts and
-    // are rebuilt whenever the widths are; without a provider nothing runs.
+    //   unexplained, … } | null   (ocr_tool over tol0's engine/hypothesis.js —
+    // guide/plugins/redaction-refiner/pixel-evidence-plan.md). It draws the
+    // name where the refiner put the bar and lets the page bytes outside the
+    // bar's body contradict it. Every name a reading shows on this bar is
+    // tested here — a pair's half on its own bar, so the two halves are judged
+    // independently and never summed across the gap. Verdicts live on
+    // box.verdicts and are rebuilt whenever the widths are; without a
+    // provider nothing runs.
     async function scoreMatches(box) {
       box.verdicts = null;
       if (typeof ocrTestHypothesis !== 'function') return;
-      const { matches } = getBoxMatchInfo(box);
+      const { entries, near } = getBoxMatchInfo(box);
       const verdicts = {};
-      for (const name of matches) {
+      for (const name of new Set([...entries, ...near].map(e => e.name))) {
         try { verdicts[name] = await ocrTestHypothesis(box, name); }
         catch (e) { console.warn('[redaction_matching] hypothesis test failed for', name, e); verdicts[name] = null; }
       }
@@ -824,34 +1029,47 @@
     }
     window.scoreMatches = scoreMatches;
 
-    /** The match a bar labels itself with: the one the user picked (by clicking
-     *  a name or cycling with [ / ]) while it still fits, else the best-ranked. */
-    function shownMatch(box, matches) {
-      if (!matches.length) return { name: null, index: -1 };
-      let i = box.matchPick ? matches.indexOf(box.matchPick) : 0;
+    const asEntry = e => (typeof e === 'string' ? { key: e, kind: 'single', name: e, full: e } : e);
+
+    /** The reading a bar labels itself with: the one the user picked (by
+     *  clicking a name or cycling with [ / ]) while it still fits; else the
+     *  partner bar's pick when that is a pair reading — one person, both
+     *  halves; else the best-ranked. */
+    function shownMatch(box, entries) {
+      const list = entries.map(asEntry);
+      if (!list.length) return { name: null, index: -1, entry: null };
+      let i = box.matchPick ? list.findIndex(e => e.key === box.matchPick) : -1;
+      if (i < 0) {
+        const pick = linkFor(box)?.other.matchPick;
+        if (pick && pick.startsWith('pair:')) i = list.findIndex(e => e.key === pick);
+      }
       if (i < 0) i = 0;
-      return { name: matches[i], index: i };
+      return { name: list[i].name, index: i, entry: list[i] };
     }
     window.shownMatch = shownMatch;
 
-    /** Pin a name as the bar's label (must be one of its matches). */
-    function setBoxMatch(boxId, name) {
+    /** Pin a reading as the bar's label (by key — a name, or a pair's
+     *  `pair:first|last`; must be one of its readings). A pair pins both bars. */
+    function setBoxMatch(boxId, key) {
       const box = typeof utbState !== 'undefined' ? utbState.getBox(boxId) : null;
       if (!box || box.type !== 'redaction') return;
-      box.matchPick = name;
-      updateAllMatchesView(boxId);
+      box.matchPick = key;
+      const entry = getBoxMatchInfo(box).entries.find(e => e.key === key);
+      const other = entry?.kind === 'pair' ? utbState.getBox(entry.partnerId) : null;
+      if (other) other.matchPick = key;
+      updateAllMatchesView(other ? null : boxId);
       if (utbState.selectedId === boxId) renderCandidates();
     }
     window.setBoxMatch = setBoxMatch;
 
-    /** Step the shown label through the bar's matches (wraps around). */
+    /** Step the shown label through the bar's readings (wraps around). */
     function cycleBoxMatch(delta, boxId = typeof utbState !== 'undefined' ? utbState.selectedId : null) {
       const box = boxId ? utbState.getBox(boxId) : null;
       if (!box || box.type !== 'redaction') return;
-      const matches = getBoxMatches(box);
-      if (matches.length < 2) return;
-      const { index } = shownMatch(box, matches);
-      setBoxMatch(boxId, matches[(index + delta + matches.length) % matches.length]);
+      const { entries } = getBoxMatchInfo(box);
+      if (entries.length < 2) return;
+      const { index } = shownMatch(box, entries);
+      setBoxMatch(boxId, entries[(index + delta + entries.length) % entries.length].key);
     }
     window.cycleBoxMatch = cycleBoxMatch;
 
@@ -870,9 +1088,9 @@
 
     const escAttr = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
-    // Clicks inside the All Matches table: a name chip pins that name on its
-    // bar; the ‹ › buttons step through the bar's matches. Delegated once so
-    // names with quotes never have to survive an inline onclick.
+    // Clicks inside the All Matches table: a name chip pins that reading on
+    // its bar; the ‹ › buttons step through the bar's readings. Delegated once
+    // so names with quotes never have to survive an inline onclick.
     document.addEventListener('DOMContentLoaded', () => {
       els.allMatchesBody?.addEventListener('click', e => {
         const chip = e.target.closest('.match-chip');
@@ -881,7 +1099,7 @@
         e.stopPropagation();
         const boxId = (chip || btn).dataset.box;
         if (typeof utbState !== 'undefined' && utbState.selectedId !== boxId) selectRedaction(boxId);
-        if (chip) setBoxMatch(boxId, chip.dataset.name);
+        if (chip) setBoxMatch(boxId, chip.dataset.key);
         else cycleBoxMatch(parseInt(btn.dataset.cycle, 10) || 1, boxId);
       });
       // In the candidates table a fitting name is clickable too.
@@ -894,6 +1112,44 @@
     });
 
     // ── All Matches summary view ──────────────────────────────
+
+    const VERDICT_MARK = { consistent: '✓', contradicted: '✗', 'no-evidence': '–' };
+    const LINK_TITLE = 'Two bars can be one name — a space apart, or split over a line break. '
+      + 'A pair reading (dashed chip) takes a first name that fits this bar and a last name that fits the other bar, from one person; '
+      + 'each half is judged on its own bar. Click it to label both bars.';
+
+    function linkText(link) {
+      if (link.kind === 'row') {
+        return link.role === 'first'
+          ? '⟷ the bar to the right may hold the rest of this name'
+          : '⟷ the bar to the left may hold the start of this name';
+      }
+      return link.role === 'first'
+        ? '↵ this name may continue on the next line'
+        : '↵ this may continue a name from the line before';
+    }
+
+    function verdictText(box, name) {
+      const vd = box.verdicts?.[name];
+      if (!vd) return '';
+      return `${vd.verdict}${vd.open ? ` · open ${vd.open.match ?? 0}/${vd.open.ink ?? 0} match` : ''}${vd.unexplained ? ` · ${vd.unexplained} unexplained` : ''}`;
+    }
+
+    function chipTitle(box, e, v, loose) {
+      const d = box.widths[e.name] - candidateEW(box, e.name);
+      const width = `width ${d >= 0 ? '+' : ''}${d.toFixed(2)} px`;
+      if (e.kind !== 'pair') {
+        const nearNote = e.near && !loose ? ' — outside the pen lattice, kept because the page does not contradict it' : '';
+        return v ? `${verdictText(box, e.name)} · ${width}${nearNote}` : `${width} — click to show this name on the bar`;
+      }
+      const other = typeof utbState !== 'undefined' ? utbState.getBox(e.partnerId) : null;
+      const ov = other ? verdictText(other, e.partnerName) : '';
+      const where = e.link === 'row'
+        ? (e.name === e.first ? 'the bar to the right' : 'the bar to the left')
+        : (e.name === e.first ? 'the first bar of the next line' : 'the last bar of the line before');
+      return `${e.full} — one name in two bars. This bar: ${e.name} (${verdictText(box, e.name) || width}); `
+        + `${where}: ${e.partnerName}${ov ? ` (${ov})` : ''} — click to label both bars`;
+    }
 
     function updateAllMatchesView(onlyId = null) {
       const redactionBoxes = getRedactionBoxes();
@@ -910,12 +1166,12 @@
         const isUpper = box.uppercase;
         const fontStyle = `font-family: ${box.fontFamily || 'inherit'}; font-feature-settings: "kern" ${box.kerning ? 1 : 0}; text-transform: ${isUpper ? 'uppercase' : 'none'};`;
 
-        const { matches, tol, loose } = getBoxMatchInfo(box);
-        const { name: shown, index } = shownMatch(box, matches);
+        const { entries, tol, loose, link } = getBoxMatchInfo(box);
+        const { name: shown, index } = shownMatch(box, entries);
 
-        if (matches.length && !loose) matchCount++;
+        if (entries.length && !loose) matchCount++;
 
-        // The bar's label is the shown match (picked, else closest)
+        // The bar's label is the shown reading (picked, else best)
         if (onlyId === null || onlyId === box.id) {
           const newLabel = shown ? (isUpper ? shown.toUpperCase() : shown) : '';
           box.text = newLabel;
@@ -923,22 +1179,17 @@
           if (typeof renderBox === 'function') renderBox(box);
         }
 
-        const VERDICT_MARK = { consistent: '✓', contradicted: '✗', 'no-evidence': '–' };
-        const chips = matches.map((m, i) => {
-          const disp = isUpper ? m.toUpperCase() : m;
-          const v = verdictOf(box, m);
-          const d = box.widths[m] - candidateEW(box, m);
+        const chips = entries.map((e, i) => {
+          const disp = isUpper ? e.name.toUpperCase() : e.name;
+          const v = entryVerdict(box, e);
           const mark = v ? `<span class="match-verdict">${VERDICT_MARK[v]}</span>` : '';
-          const vd = box.verdicts?.[m];
-          const title = v
-            ? `${v}${vd.open ? ` · open ${vd.open.match ?? 0}/${vd.open.ink ?? 0} match` : ''}${vd.unexplained ? ` · ${vd.unexplained} unexplained` : ''} · width ${d >= 0 ? '+' : ''}${d.toFixed(2)} px`
-            : `width ${d >= 0 ? '+' : ''}${d.toFixed(2)} px — click to show this name on the bar`;
-          return `<span class="match-chip${i === index ? ' active' : ''}${v ? ' verdict-' + v : ''}" style="${fontStyle}"
-                    data-box="${box.id}" data-name="${escAttr(m)}" title="${escAttr(title)}">${mark}${escAttr(disp)}</span>`;
+          const cls = `match-chip${i === index ? ' active' : ''}${v ? ' verdict-' + v : ''}${e.kind === 'pair' ? ' pair' : ''}${e.near && !loose ? ' near' : ''}`;
+          return `<span class="${cls}" style="${fontStyle}"
+                    data-box="${box.id}" data-key="${escAttr(e.key)}" title="${escAttr(chipTitle(box, e, v, loose))}">${mark}${escAttr(disp)}</span>`;
         }).join('');
-        const nConsistent = matches.filter(m => verdictOf(box, m) === 'consistent').length;
-        const counter = box.verdicts ? `${nConsistent} of ${matches.length} consistent` : `${index + 1}/${matches.length}`;
-        const cycle = matches.length > 1
+        const nConsistent = entries.filter(e => entryVerdict(box, e) === 'consistent').length;
+        const counter = box.verdicts ? `${nConsistent} of ${entries.length} consistent` : `${index + 1}/${entries.length}`;
+        const cycle = entries.length > 1
           ? `<span class="match-cycle" title="Several names fit this width — click one, or press [ / ] with the bar selected">
                <button class="match-cycle-btn" data-box="${box.id}" data-cycle="-1">&lsaquo;</button>${counter}<button class="match-cycle-btn" data-box="${box.id}" data-cycle="1">&rsaquo;</button>
              </span>`
@@ -949,9 +1200,12 @@
         const looseNote = loose
           ? `<div class="match-loose">No name fits the pen-exact width (±${PEN_TOL_PX} px). Nearest within ±${tol} px:</div>`
           : '';
-        const matchHtml = matches.length
-          ? `${looseNote}${cycle}${chips}${tolNote}`
-          : `<span class="no-match">No obvious matches</span>${tolNote}`;
+        const linkNote = link
+          ? `<div class="match-link" title="${escAttr(LINK_TITLE)}">${linkText(link)}</div>`
+          : '';
+        const matchHtml = entries.length
+          ? `${linkNote}${looseNote}${cycle}${chips}${tolNote}`
+          : `${linkNote}<span class="no-match">No obvious matches</span>${tolNote}`;
 
         const isSelected = utbState.selectedId === box.id ? 'selected-row' : '';
 
@@ -1018,16 +1272,4 @@
 
       selectRedaction(newBox.id);
       calculateWidthsForRedaction(newBox.id);
-    }
-
-    function fontFamilyToTtf(fontFamily) {
-      const map = {
-        'Times New Roman': 'times.ttf',
-        'Courier New': 'courier_new.ttf',
-        'Arial': 'arial.ttf',
-        'Calibri': 'calibri.ttf',
-        'Segoe UI': 'segoe_ui.ttf',
-        'Verdana': 'verdana.ttf',
-      };
-      return map[fontFamily] || 'times.ttf';
     }

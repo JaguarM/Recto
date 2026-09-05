@@ -31,7 +31,31 @@ A word *between* the bar and its sibling is still legitimate evidence
 (`███ and ███`). Only when there is no word in between does the edge keep its
 **detected** position: there, the painted ink is the only evidence there is.
 Such an edge is never `exact`, because it comes from the detector rather than a
-reader pen. `box.refineInfo.blocked` reports which sides were bounded this way.
+reader pen. `box.refineInfo.blocked` reports which sides were bounded this way —
+also for a bar with no neighbour at all, which gets a verdict (`left` / `right`
+null, `blocked` set) though nothing moves it. That is how a matcher tells a
+lone bar from one whose only company on the row is the other half of a name
+(`redaction_matching` pairs such bars).
+
+Whether a word is *behind* the sibling is judged by its centre, so a comma the
+sibling's painted edge runs a pixel into (`[A], [B]`) still stands between the
+bars and is B's neighbour as much as A's. And since a bar's bound is its
+sibling's **current** edge, a full run visits bars in reading order and repeats
+while a pass moves anything (at most three): visited B-first, `[A], [B]` used
+to lose B's comma behind A's not-yet-refined edge.
+
+### Punctuation the bar runs over
+
+Text lying mostly under the bar is the redacted text itself (a text layer can
+still carry it) and is never a neighbour. A **punctuation mark** is the
+exception: the redactor's box often runs over the comma after a name
+(`[Lesley Groff,] Jean` — 2.75 px of the comma under the bar on the reference
+page), and a mark the reader still certified from what shows belongs to the
+visible text, so it is the neighbour and the bar ends at its pen. Only a mark
+covered whole is hidden text. A neighbour read that way is marked
+`partial` (more than 2 px of it under the bar — a detector column plus a side
+bearing is less), and a partial pen makes the edge **not exact**: it is
+evidence, but not lattice-exact.
 
 ### Which text layer
 
@@ -110,7 +134,8 @@ bar is redrawn and `calculateAllWidths` (when present) re-scores it.
 
 ### What it leaves alone
 
-- Bars with no neighbouring words on their line.
+- Bars with no neighbouring words on their line (they still get a
+  `refineInfo` saying so, with `blocked`).
 - The box the user is currently selecting/editing.
 - A bar whose neighbours have not changed since it was last refined (the
   re-run after every page hydration is a cheap signature compare).
@@ -155,11 +180,13 @@ notice is `words.LICENSE.txt` next to it.
   `window.RedactionRefiner` (`classifyToken`, `completions`, `resolveEdge`,
   `punctBindsToward`, `facingRun` …).
   After a run, `box.refineInfo` says what each side was judged to be
-  (`punct` / `word` / `fragment`, the token, the completion and its placement),
-  the `x`/`w` it produced, and `exact` — true when both edges came from the
-  reader's OCR pens, so the width is exact to mupdf's ¼-px lattice. A matcher
-  reads `exact` to match names to a quarter pixel instead of a pixel tolerance
-  (`redaction_matching` does).
+  (`punct` / `word` / `fragment`, the token, the completion and its placement,
+  `partial` when the bar covers part of the neighbour), which sides a sibling
+  bar bounded (`blocked`), the `x`/`w` it produced, and `exact` — true when
+  both edges came from the reader's OCR pens read whole, so the width is exact
+  to mupdf's ¼-px lattice. A matcher reads `exact` to match names to a quarter
+  pixel instead of a pixel tolerance, a missing side to allow for the
+  redactor's padding, and `blocked` to pair bars (`redaction_matching` does).
 
 ## Tests
 

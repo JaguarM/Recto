@@ -15,8 +15,9 @@ const root = path.resolve(here, '..');
 
 // ── Viewer globals (api.js touches these at load) ──────────
 globalThis.window = globalThis;
+const stubEl = () => ({ style: {}, classList: { add() {}, remove() {}, toggle() {} }, innerHTML: '', textContent: '' });
 globalThis.document = {
-  getElementById: () => null,
+  getElementById: (id) => (/^(all-matches|match-progress|names-body|page-info|sort-icon)/.test(id) ? stubEl() : null),
   querySelector: () => null,
   querySelectorAll: () => [],
   addEventListener() {},
@@ -31,7 +32,8 @@ globalThis.utbState = {
 globalThis.PDFHooks = { on() {}, emit() {} };
 
 vm.runInThisContext(fs.readFileSync(path.join(root, 'static', 'redaction_matching', 'api.js'), 'utf8'));
-for (const fn of ['getBoxMatchInfo', 'getBoxMatches', 'effectiveTolerance', 'scoreMatches', 'shownMatch', 'matchesLetterFilter']) {
+for (const fn of ['getBoxMatchInfo', 'getBoxMatches', 'effectiveTolerance', 'scoreMatches', 'shownMatch', 'matchesLetterFilter',
+                  'linkFor', 'halfStrings', 'setBoxMatch', 'cycleBoxMatch', 'fitRange']) {
   assert.equal(typeof globalThis[fn], 'function', `${fn} is a global`);
 }
 
@@ -50,11 +52,15 @@ const test = (name, fn) => tests.push({ name, fn });
 
 test('pixel tolerance: everything within the field, closest first', () => {
   const box = bar();
+  box.refineInfo = { ...exactInfo(box), exact: false, source: 'embedded', left: { kind: 'word' }, right: { kind: 'word' } };
   const info = getBoxMatchInfo(box);
   assert.deepEqual(info.matches, ['Justin Nelson', 'Sarah Kellen', 'Nicki Haskell']);
   assert.equal(info.tol, 3);
   assert.equal(info.loose, false);
   assert.equal(effectiveTolerance(bar({ tolerance: undefined })), 3, 'default field');
+  // With no refiner every edge is the detector's: a name up to the redactor's
+  // padding narrower than the bar fits too (Woody Allen, 3.5 px under).
+  assert.deepEqual(getBoxMatches(bar()), ['Justin Nelson', 'Sarah Kellen', 'Nicki Haskell', 'Woody Allen']);
 });
 
 test('pen-exact bar: the lattice decides, the 0.8 px name is out', () => {
@@ -114,8 +120,8 @@ test('page-pixel verdicts rank the list: consistent, no-evidence, contradicted',
     return null;
   };
   await scoreMatches(box);
-  assert.deepEqual(calls.sort(), ['Justin Nelson', 'Sarah Kellen'], 'only the fitting names are tested');
-  assert.deepEqual(getBoxMatches(box), ['Sarah Kellen', 'Justin Nelson']);
+  assert.deepEqual(calls.sort(), ['Justin Nelson', 'Nicki Haskell', 'Sarah Kellen'], 'the fits and the near misses are tested, not the far ones');
+  assert.deepEqual(getBoxMatches(box), ['Sarah Kellen', 'Justin Nelson'], 'a near miss without a consistent verdict stays out');
   assert.equal(shownMatch(box, getBoxMatches(box)).name, 'Sarah Kellen');
   // The user's own pick still wins while it fits.
   box.matchPick = 'Justin Nelson';
@@ -123,9 +129,193 @@ test('page-pixel verdicts rank the list: consistent, no-evidence, contradicted',
   // A provider that throws is a null verdict, not a broken list.
   globalThis.ocrTestHypothesis = async () => { throw new Error('boom'); };
   await scoreMatches(box);
-  assert.deepEqual(box.verdicts, { 'Justin Nelson': null, 'Sarah Kellen': null });
+  assert.deepEqual(box.verdicts, { 'Justin Nelson': null, 'Nicki Haskell': null, 'Sarah Kellen': null });
   assert.equal(getBoxMatches(box).length, 2);
   delete globalThis.ocrTestHypothesis;
+});
+
+// ── Two bars, one name ─────────────────────────────────────
+// Bars carry a refiner's verdict (refineInfo): what stood on each side and
+// whether a sibling bar bounded the search there. Widths are set directly,
+// as the /widths call would leave them.
+const PERSONS = [
+  { first: ['Nadia', 'Nada'], last: ['Marcinkova'], prefix: null, nickname: null, suffix: null },
+  { first: ['Sarah'], last: ['Kellen'], prefix: null, nickname: null, suffix: null },
+  { first: ['Gregory'], last: ['Bledsoe'], prefix: 'Dr.', nickname: null, suffix: null },
+];
+const info = (over) => ({ source: 'ocr', left: null, right: null, blocked: { left: false, right: false }, remnants: [], exact: false, ...over });
+const word = (token) => ({ kind: 'word', token });
+function pairFixture(kind = 'row') {
+  utbState.boxes = [];
+  state.namesData = PERSONS;
+  state.customCandidates = [];
+  state.excludedPersons = new Set();
+  // "[Nadia] [Marcinkova]" a space apart, or "[Nadia]" ending a row and
+  // "[Marcinkova]" opening the next.
+  const A = bar({ id: 'A', x: 100, w: 40, y: 0, h: 20, candidates: [], widths: { Nadia: 40.1, Sarah: 36.0, Gregory: 52.0, Marcinkova: 76.2 } });
+  const B = bar({ id: 'B', candidates: [], widths: { Marcinkova: 76.2, Kellen: 45.0, Bledsoe: 50.0, Nadia: 40.1 } });
+  if (kind === 'row') {
+    Object.assign(B, { x: 144, w: 76, y: 0, h: 20 });
+    A.refineInfo = info({ left: word(','), right: null, blocked: { left: false, right: true } });
+    B.refineInfo = info({ left: null, right: word(','), blocked: { left: true, right: false } });
+  } else {
+    Object.assign(B, { x: 120, w: 76, y: 21, h: 20 });
+    A.refineInfo = info({ left: word(','), right: null });
+    B.refineInfo = info({ left: null, right: word(',') });
+  }
+  A.refineInfo.x = A.x; A.refineInfo.w = A.w;
+  B.refineInfo.x = B.x; B.refineInfo.w = B.w;
+  A.nameSettings = { ...state.nameSettings };
+  B.nameSettings = { ...state.nameSettings };
+  utbState.boxes.push(A, B);
+  return { A, B };
+}
+const pairKeys = (box) => getBoxMatchInfo(box).entries.filter(e => e.kind === 'pair').map(e => e.key);
+
+test('two bars a space apart are one person: first name on the left bar, last name on the right', () => {
+  const { A, B } = pairFixture('row');
+  assert.deepEqual(linkFor(A) && { other: linkFor(A).other.id, role: linkFor(A).role, kind: linkFor(A).kind }, { other: 'B', role: 'first', kind: 'row' });
+  assert.deepEqual(linkFor(B) && { other: linkFor(B).other.id, role: linkFor(B).role, kind: linkFor(B).kind }, { other: 'A', role: 'last', kind: 'row' });
+  // Nadia fits A and Marcinkova fits B — the same person. Sarah fits A too
+  // (36.0 vs 40, within 3 px) but no Kellen fits B, and Bledsoe fits B but no
+  // Gregory fits A: those never become readings.
+  assert.deepEqual(pairKeys(A), ['pair:Nadia|Marcinkova']);
+  assert.deepEqual(pairKeys(B), ['pair:Nadia|Marcinkova']);
+  const a = getBoxMatchInfo(A).entries[0], b = getBoxMatchInfo(B).entries[0];
+  assert.equal(a.name, 'Nadia'); assert.equal(a.partnerName, 'Marcinkova'); assert.equal(a.full, 'Nadia Marcinkova');
+  assert.equal(b.name, 'Marcinkova'); assert.equal(b.partnerName, 'Nadia');
+  assert.deepEqual(getBoxMatches(A), ['Nadia']);
+  assert.deepEqual(getBoxMatches(B), ['Marcinkova']);
+  // A single reading that fits B alone ranks after the pair: the pair
+  // explains both bars with one person.
+  B.candidates = ['Clare Hazell']; B.widths['Clare Hazell'] = 76.22;
+  assert.deepEqual(getBoxMatches(B), ['Marcinkova', 'Clare Hazell']);
+  assert.equal(getBoxMatchInfo(B).entries[0].kind, 'pair');
+  // The bar's own strings to measure: its half of every person.
+  assert.deepEqual(halfStrings(A, linkFor(A)).sort(), ['Gregory', 'Nadia', 'Sarah']);
+  assert.deepEqual(halfStrings(B, linkFor(B)).sort(), ['Bledsoe', 'Kellen', 'Marcinkova']);
+});
+
+test('a word between two bars keeps them apart; so does a wide gap', () => {
+  const { A, B } = pairFixture('row');
+  A.refineInfo.right = word('and');
+  assert.equal(linkFor(A), null);
+  assert.equal(linkFor(B), null, 'B sees no partner either — A has a word on its side');
+  const f = pairFixture('row');
+  f.B.x = 100 + 40 + 20;             // 20 px apart at 12 pt — more than a space
+  assert.equal(linkFor(f.A), null);
+});
+
+test('a name split over a line break: last bar of one row, first bar of the next', () => {
+  const { A, B } = pairFixture('line');
+  assert.equal(linkFor(A).kind, 'line'); assert.equal(linkFor(A).role, 'first'); assert.equal(linkFor(A).other.id, 'B');
+  assert.equal(linkFor(B).kind, 'line'); assert.equal(linkFor(B).role, 'last');
+  assert.deepEqual(pairKeys(A), ['pair:Nadia|Marcinkova']);
+  assert.equal(getBoxMatchInfo(B).entries[0].name, 'Marcinkova');
+  // Not the next row → not linked; a word before B → not linked.
+  B.y = 60; assert.equal(linkFor(A), null); B.y = 21;
+  B.refineInfo.left = word('the'); assert.equal(linkFor(A), null);
+});
+
+test('settings shape the halves: aliases, prefix, letter filters, custom names', () => {
+  const { A, B } = pairFixture('row');
+  A.widths.Nada = 40.0;
+  A.nameSettings.expandFirstAliases = true;
+  assert.deepEqual(pairKeys(A).sort(), ['pair:Nada|Marcinkova', 'pair:Nadia|Marcinkova']);
+  A.nameSettings.expandFirstAliases = false;
+  A.nameSettings.startsWith = 'S';   // a remnant on A says the first name starts with S
+  assert.deepEqual(pairKeys(A), [], 'Nadia is filtered out; Sarah fits A but Kellen does not fit B');
+  A.nameSettings.startsWith = '';
+  A.nameSettings.includePrefix = true;
+  A.widths['Dr. Gregory'] = 40.0; B.widths.Bledsoe = 76.0;
+  assert.ok(pairKeys(A).includes('pair:Dr. Gregory|Bledsoe'));
+  A.nameSettings.includePrefix = false;
+  state.customCandidates = ['Lex Wexner'];
+  A.widths.Lex = 40.2; B.widths.Wexner = 76.3;
+  assert.ok(pairKeys(B).includes('pair:Lex|Wexner'), 'a custom name splits at its last space');
+  A.nameSettings.generateFull = false;
+  assert.deepEqual(pairKeys(A), [], 'a pair is a full name — off with Full name');
+});
+
+test('picking a pair reading labels both bars; the partner follows a pair pick', () => {
+  const { A, B } = pairFixture('row');
+  A.widths.Sarah = 40.0; B.widths.Kellen = 76.1;      // a second person fits both bars
+  assert.deepEqual(pairKeys(A).sort(), ['pair:Nadia|Marcinkova', 'pair:Sarah|Kellen']);
+  setBoxMatch('B', 'pair:Sarah|Kellen');
+  assert.equal(B.matchPick, 'pair:Sarah|Kellen');
+  assert.equal(A.matchPick, 'pair:Sarah|Kellen', 'one person, both halves');
+  assert.equal(shownMatch(A, getBoxMatchInfo(A).entries).name, 'Sarah');
+  assert.equal(shownMatch(B, getBoxMatchInfo(B).entries).name, 'Kellen');
+  // A pick on one bar alone (no pick on the other) still couples them.
+  A.matchPick = null; B.matchPick = 'pair:Nadia|Marcinkova';
+  assert.equal(shownMatch(A, getBoxMatchInfo(A).entries).name, 'Nadia');
+  // Cycling steps through the readings by key.
+  A.matchPick = null; B.matchPick = null;
+  const first = shownMatch(A, getBoxMatchInfo(A).entries).name;
+  cycleBoxMatch(1, 'A');
+  assert.notEqual(shownMatch(A, getBoxMatchInfo(A).entries).name, first);
+  assert.equal(A.matchPick, B.matchPick);
+});
+
+test('a pair is judged on both bars: contradicted anywhere is contradicted', async () => {
+  const { A, B } = pairFixture('row');
+  A.widths.Sarah = 40.0; B.widths.Kellen = 76.1;
+  const tested = [];
+  globalThis.ocrTestHypothesis = async (box, name) => {
+    tested.push(`${box.id}:${name}`);
+    if (box.id === 'A') return { verdict: 'consistent' };
+    return { verdict: name === 'Kellen' ? 'contradicted' : 'consistent' };
+  };
+  await scoreMatches(A);
+  await scoreMatches(B);
+  assert.deepEqual(tested.sort(), ['A:Nadia', 'A:Sarah', 'B:Kellen', 'B:Marcinkova'], 'each half on its own bar, never the summed name');
+  const entries = getBoxMatchInfo(A).entries;
+  assert.deepEqual(entries.map(e => e.key), ['pair:Nadia|Marcinkova', 'pair:Sarah|Kellen'], 'the contradicted pair ranks last');
+  assert.equal(getBoxMatchInfo(B).entries[0].name, 'Marcinkova');
+  delete globalThis.ocrTestHypothesis;
+});
+
+test('without a refiner verdict no bar is linked', () => {
+  const { A, B } = pairFixture('row');
+  delete A.refineInfo;
+  assert.equal(linkFor(A), null);
+  assert.equal(linkFor(B), null);
+  assert.deepEqual(getBoxMatchInfo(B).entries, []);
+});
+
+test('a near miss the page vouches for joins a pen-exact list', async () => {
+  const box = bar();
+  box.refineInfo = exactInfo(box);
+  globalThis.ocrTestHypothesis = async (b, name) => ({ verdict: name === 'Nicki Haskell' ? 'consistent' : name === 'Justin Nelson' ? 'contradicted' : 'no-evidence' });
+  await scoreMatches(box);
+  const { entries, near, loose } = getBoxMatchInfo(box);
+  assert.deepEqual(entries.map(e => e.name), ['Nicki Haskell', 'Sarah Kellen', 'Justin Nelson']);
+  assert.equal(entries[0].near, true);
+  assert.equal(loose, false);
+  assert.deepEqual(near.map(e => e.name), ['Nicki Haskell']);
+  // Between two consistent names the pen-exact one leads.
+  globalThis.ocrTestHypothesis = async () => ({ verdict: 'consistent' });
+  await scoreMatches(box);
+  assert.deepEqual(getBoxMatches(box), ['Justin Nelson', 'Sarah Kellen', 'Nicki Haskell']);
+  delete globalThis.ocrTestHypothesis;
+});
+
+test('a detector edge admits names narrower than the bar by the redactor\'s padding', () => {
+  // "[Bledsoe] [is a]": the right edge is the black box's, 4.4 px past the name.
+  const box = bar({ w: 55.84, candidates: ['Bledsoe', 'Wide', 'Far'], widths: { Bledsoe: 51.4, Wide: 59.5, Far: 48.0 } });
+  box.refineInfo = { ...exactInfo(box), exact: false, left: { kind: 'punct' }, right: null };
+  const r = fitRange(box);
+  assert.equal(r.over, 3);
+  assert.ok(Math.abs(r.under - 0.4 * 16) < 1e-9, `under = 0.4 em: ${r.under}`);
+  assert.equal(fitRange({ ...box, sizePt: 72 }).under, 10, 'the padding is capped — a 72 pt bar does not get 38 px');
+  assert.deepEqual(getBoxMatches(box), ['Bledsoe']);
+  // With reader pens on both sides the range is the tolerance both ways.
+  box.refineInfo.right = { kind: 'word' };
+  assert.deepEqual(fitRange(box), { over: 3, under: 3 });
+  assert.deepEqual(getBoxMatches(box), []);
+  // No refiner at all: every edge is the detector's.
+  delete box.refineInfo;
+  assert.deepEqual(getBoxMatches(box), ['Bledsoe']);
 });
 
 test('starts-with / ends-with filter takes several letters, case-insensitive', () => {
