@@ -13,10 +13,13 @@
 //
 //   consistent    every judged pixel matches (to the line's own tolerance)
 //                 and no page ink in the window is left unexplained, on at
-//                 least minInk pixels of evidence (default 6: over a LIST the
+//                 least minInk pixels of evidence (default 2: over a LIST the
 //                 contradictions do the guarding — on the reference bar the
 //                 right name fits 9 shadow pixels and every other name is
-//                 contradicted on the same 9)
+//                 contradicted on the same 9; on a bar drawn to the name's
+//                 advance box the only clue is the last glyph's overhang,
+//                 the two pixels of an r's arm or an f's hook under the
+//                 edge, and the names that share them share the letter)
 //   contradicted  a judged pixel differs, page ink no glyph explains, or
 //                 the name overruns its right neighbour (reason 'width':
 //                 its end plus the gap passes the right pen by over fitTol)
@@ -120,7 +123,7 @@
   //          the neighbour words, and the neighbouring LINES' glyphs where
   //          their rows overlap this window: at a tight pitch the line
   //          above's descenders share rows with this line's ascenders],
-  //          minInk (default 6), fitTol (default 1.25: how far the name's end
+  //          minInk (default 2), fitTol (default 1.25: how far the name's end
 //          may miss the right neighbour's pen less one space)}
   // → { verdict, reason?, missing?, pens, advanceW, penFit, open, edge,
   //     dark, rows (the share of edge/dark that came from the bar's own
@@ -128,7 +131,7 @@
   //     mism, render }
   function testHypothesis(page, det, set, line, box, text, opts) {
     const quant = opts?.quant || null;
-    const minInk = opts?.minInk ?? 6;
+    const minInk = opts?.minInk ?? 2;
     const explained = opts?.explained || [];
     const tol = line.tol || 0, phy = line.phy || 0;
     const spaceLine = line.spaceLine ?? null;

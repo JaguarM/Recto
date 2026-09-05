@@ -419,8 +419,9 @@ unexplained 0) and contradicts the other four; the item-3 bar keeps it too
   compositor slips a byte), but over a list one byte of slack is harmless:
   SARAH KELLEN hits 9 of 9, the three drawable decoys hit 1–2 and leave 7–9
   unexplained, GÉRALD MARIE is contradicted at its own pen. With the evidence
-  floor at 6 pixels (the list's contradictions guard; 12 was the reader's
-  single-glyph floor) both bars of the reference document now resolve to
+  floor lowered (the list's contradictions guard; 12 was the reader's
+  single-glyph floor, 6 the first list floor, 2 since the memos — see the
+  clue pixels below) both bars of the reference document now resolve to
   SARAH KELLEN, and `verify-redactions.mjs` asserts both.
 
 **What two memos with known text taught (2026-09-05, later).** The user
@@ -446,11 +447,19 @@ tester on every real bar against its truth and Recto's name list, and
   bars 77).
 
 The finding itself: these bars are the names' advance boxes, the bearings
-sit inside the body, and the edge columns carry the bar's own byte. No name
-gets evidence; the truth is never contradicted (18 bars); where the list
-holds it, it is the one name the page did not contradict (Sarah Kellen on
-the first memo, 9 of 9 others contradicted) — the verifier now counts such
-a bar as a *survivor*. Five truths are missing from the matcher's lists
+sit inside the body, and the edge columns carry the bar's own byte — except
+where the last glyph overhangs its advance box or the first one leans out.
+The user named them: the last r of "Lex Wexner" (two pixels under the 151
+right edge, 71 and 39) and the last f of "Lesley Groff" (two under the 211
+edge, 172 and 192); the tester also finds the A of "Adriana Mucinska". Strip
+the bar's own byte and what remains is the compositor's rounding or a clue
+pixel. The evidence floor of 6 had discarded them; at 2 the three names are
+consistent, every decoy that survives with them shares the letter (r-names,
+"Andre Assaf", A-names), and within ½ px of width Lex Wexner and Lesley
+Groff stand alone. Elsewhere no name gets evidence; the truth is never
+contradicted (18 bars); where the list holds it, it is the one name the
+page did not contradict (Sarah Kellen on the first memo, 9 of 9 others
+contradicted) — the verifier now counts such a bar as a *survivor*. Five truths are missing from the matcher's lists
 on their bars (Adriana Mucinska, Lex Wexner, Lesley Groff, Richard Barnett,
 Gregory Bledsoe) although `names.json` holds every one of them: the
 matcher's width window, not the pixels — the page is set in Calibri 1.02,
