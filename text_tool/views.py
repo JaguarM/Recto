@@ -3,11 +3,14 @@ from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
 from pdf_core.logic import geometry as geo
-from .logic.width_calculator import get_text_widths, get_available_fonts, get_justified_space_width
+from .logic import fonts
+from .logic.width_calculator import get_text_widths, get_justified_space_width
 
 
 @csrf_exempt
 def calculate_widths(request):
+    """HarfBuzz widths. The face is named the catalogue way — `family`,
+    `bold`, `italic` — or, for older callers, as a file: `font: 'times.ttf'`."""
     if request.method != 'POST':
         return JsonResponse({"detail": "Method not allowed"}, status=405)
     try:
@@ -17,7 +20,12 @@ def calculate_widths(request):
 
     texts = data.get('strings', [])
     try:
-        font_name = str(data.get('font') or 'times.ttf')
+        family = data.get('family')
+        font_name = str(data.get('font') or '') or None
+        if family:
+            font_path = fonts.resolve(family, bool(data.get('bold')), bool(data.get('italic')))
+        else:
+            font_path = fonts.resolve_file(font_name) or fonts.resolve(fonts.default_family())
         font_size = float(data.get('size') or 12)
         scale = float(data.get('scale') or geo.DEFAULT_SCALE)
         force_uppercase = bool(data.get('force_uppercase', False))
@@ -31,11 +39,11 @@ def calculate_widths(request):
         if mode == 'justified':
             block_w = float(data.get('block_w', 0))
             text = texts[0] if texts else ''
-            jsw = get_justified_space_width(text, block_w, font_name, font_size,
+            jsw = get_justified_space_width(text, block_w, font_path, font_size,
                                             force_uppercase, scale / 100.0, kerning)
             return JsonResponse({"space_width": jsw})
 
-        widths = get_text_widths(texts, font_name, font_size, force_uppercase,
+        widths = get_text_widths(texts, font_path, font_size, force_uppercase,
                                   scale / 100.0, kerning, space_width=space_width)
         return JsonResponse({"results": widths})
     except Exception as e:
@@ -45,4 +53,6 @@ def calculate_widths(request):
 
 
 def list_fonts(_request):
-    return JsonResponse(get_available_fonts(), safe=False)
+    """The catalogue: families, their style files and which are installed."""
+    return JsonResponse({'families': fonts.families(), 'default': fonts.default_family(),
+                         'static': '/static/fonts/'})

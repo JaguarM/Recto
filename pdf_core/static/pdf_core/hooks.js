@@ -13,7 +13,10 @@
    'viewer:clear'    ()                              — viewer is about to be torn down for a page change
    'page:rendered'   ({ pageContainer, pageNum })    — a page container was added to the DOM
    'pages:refresh'   ()                              — re-sync any per-page overlays
-   'document:loaded' ({ file, isDefault })           — a document finished loading (file === null on auto-load)
+   'document:loaded' ({ file, isDefault, pdfFonts, sizePt }) — a document finished loading (file === null on auto-load;
+                      pdfFonts = declared BaseFont names, most used first; sizePt = sampled body size)
+   'typography:detected' ({ fontFamily, sizePt, source }) — emitted by a plugin that MEASURED the page's face
+                      (an OCR read); the text tool selects it as the default for new boxes
    'zoom:changed'    ({ zoom })                       — the viewer zoom factor changed
 
    Handlers may be async; emit() awaits them in registration order and

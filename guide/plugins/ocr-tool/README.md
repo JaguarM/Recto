@@ -202,3 +202,22 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
   asserts every byte-clean OCR box reports 0 differing pixels; its
   `tools/verify-recto-pixels.mjs` runs the same check over a folder of PDFs.
   Design record: [pixel-view-plan.md](pixel-view-plan.md).
+
+## Faces: `engine/set-fonts.js` and the toolbar default
+
+Every glyph set names the face it was rendered from in `engine/set-fonts.js`,
+generated in tol0 from the registry's PROVENANCE (`npm run set-fonts`, asserted
+current by `npm test`, synced with the engine): `{ family, bold, italic, file,
+sizePx, plain }`, or `null` for page-cut sets. Family names are the text tool's
+catalogue names, so a line read with `nimbus791` is a `Nimbus Mono PS` box and
+the browser draws its vector text from the URW file itself.
+
+- `ocrAddBoxes` sets each segment's family/bold/italic from the set that drew
+  most of its glyphs (per-glyph `src` on union lines), through
+  `ocrFontFromSetName`.
+- When a read finishes (live or replayed from the cache) the adapter emits
+  `typography:detected { fontFamily, sizePt, source: 'ocr' }` with the
+  dominant face and size of the certified lines (weighted by glyph count);
+  `text_tool`'s `fonts.js` selects it in the font menu and size input.
+- The pixel view picks the glyph set for a hand-typed box by family and size
+  through the same table (`plain` sets only — stock face, stock law).

@@ -13,6 +13,7 @@ python -m pip install -r requirements.txt   # install deps
 python manage.py runserver 5000             # run dev server → http://localhost:5000
 python manage.py check                      # sanity check (used to verify plugin removal)
 python manage.py test                       # run tests (per app: python manage.py test text_tool)
+python manage.py fonts_setup                # build assets/fonts from the catalogue (URW faces from ../tol0, Windows faces copied)
 ```
 
 On Windows, `run_app.bat` does install + runserver + opens the browser. `setup.sh` is the Linux production installer (Gunicorn + Nginx + systemd) — not for local dev.

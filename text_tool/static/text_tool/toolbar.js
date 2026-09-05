@@ -148,11 +148,10 @@
   const _naturalSpaceCache = new Map();
 
   async function fetchNaturalSpaceWidth(box) {
-    const font  = _ttfForFamily(box.fontFamily);
     // HarfBuzz expects the size in POINTS — box.sizePt is already points.
     const size  = box.sizePt;
     const scale = GEO.docScale();  // px-per-pt × 100 for this document
-    const key = `${font}|${size}|${box.kerning ? 1 : 0}|${scale}`;
+    const key = `${box.fontFamily}|${box.bold ? 'b' : ''}${box.italic ? 'i' : ''}|${size}|${box.kerning ? 1 : 0}|${scale}`;
     if (_naturalSpaceCache.has(key)) return _naturalSpaceCache.get(key);
     try {
       const resp = await fetch('/widths', {
@@ -160,7 +159,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           strings: [' '],
-          font:    font,
+          family:  box.fontFamily,     // resolved through the font catalogue server-side
+          bold:    !!box.bold,
+          italic:  !!box.italic,
           size:    size,
           scale:   scale,
           kerning:    box.kerning,
@@ -178,16 +179,6 @@
   window.getNaturalSpaceWidth = fetchNaturalSpaceWidth;
 
   // Map CSS family name → TTF filename (for HarfBuzz backend)
-  function _ttfForFamily(family) {
-    const lc = (family || '').toLowerCase().replace(/[\s\-_]/g, '');
-    if (lc.includes('times'))   return 'times.ttf';
-    if (lc.includes('arial'))   return 'arial.ttf';
-    if (lc.includes('calibri')) return 'calibri.ttf';
-    if (lc.includes('courier')) return 'courier_new.ttf';
-    if (lc.includes('segoe'))   return 'segoe_ui.ttf';
-    if (lc.includes('verdana')) return 'verdana.ttf';
-    return 'times.ttf';
-  }
 
   // ── Event wiring ──────────────────────────────────────────────
 

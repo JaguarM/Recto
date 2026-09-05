@@ -10,7 +10,7 @@
 
 | Control ID | Property | Notes |
 |------------|----------|-------|
-| `#fabric-font-family` | `box.fontFamily` | CSS family name (e.g. `"Times New Roman"`) |
+| `#fabric-font-family` | `box.fontFamily` | Catalogue family name (e.g. `"Nimbus Roman"`, `"Times New Roman"`); the menu is filled from the catalogue by `fonts.js` |
 | `#fabric-font-size` | `box.sizePt` | Displayed, entered, and stored in **points** — no conversion |
 | `#fabric-bold` | `box.bold` | Toggle button (`.active` class = on) |
 | `#fabric-italic` | `box.italic` | Toggle button |
@@ -122,3 +122,42 @@ This replaced the old double-click gesture, which is now used for inline text ed
 ### Placing new boxes
 
 - `window.handleManualAddBox(pageNum, x, y)`: delegates to `createNewRedaction()` if a plugin supplies it, otherwise creates a `type='redaction'` box directly. Calls `window._utbFindNearestLine?.()` — defined by `etv-fetch.js` (optional: gracefully absent if the ETV plugin is not installed). Both are optional seams; the tool works either way.
+
+---
+
+## The font catalogue — `fonts.js` + `logic/fonts.py`
+
+`assets/fonts/fonts.json` is the one list of faces Recto knows: MuPDF's own
+URW faces first (Nimbus Roman, Nimbus Sans, Nimbus Mono PS — what MuPDF draws
+unembedded Times/Helvetica/Courier with), then DejaVu Serif and the Windows
+faces the OCR glyph sets model (Times New Roman, Arial, Courier New, Calibri,
+Cambria, Georgia, Tahoma, Segoe UI, Verdana, Century Schoolbook). Each family
+names its style files (regular/bold/italic/bolditalic) and the PDF BaseFont
+names that mean it. `python manage.py fonts_setup` builds the files: the URW
+faces are converted from tol0's certified CFF outlines into OpenType, the
+Windows faces copied from `C:/Windows/Fonts`.
+
+Three consumers, one source:
+
+- **`/fonts-list`** (`views.list_fonts`) serves the catalogue with a `present`
+  map per style.
+- **`fonts.js`** (loaded first) fetches it, injects an `@font-face` rule per
+  installed style (`/static/fonts/<file>`, weight/style set so bold and italic
+  resolve to the right file), fills `#fabric-font-family`, and exposes
+  `window.FontCatalog` (`has`, `familyForPdfName`, `select(family, sizePt)`).
+  SVG text in `font-family: "Nimbus Roman"` is therefore drawn from the same
+  file HarfBuzz measures with — the vector face matches the raster face.
+- **`/widths`** takes `family`, `bold`, `italic` and resolves the file through
+  `logic/fonts.py` (`resolve` falls back bold italic → bold → italic → regular
+  → Times New Roman); the old `font: 'times.ttf'` form still works.
+
+### Choosing the default face
+
+`fonts.js` listens to two generic `PDFHooks` events and sets the menu (and
+the size input) from them, so the core keeps no font list and no plugin is
+named:
+
+| Event | Emitted by | Effect |
+|---|---|---|
+| `document:loaded` (`pdfFonts`, `sizePt`) | the core viewer | the first declared BaseFont that maps to a catalogue family (`Times-Bold` → Nimbus Roman, `TimesNewRomanPSMT` → Times New Roman), else the default |
+| `typography:detected` (`fontFamily`, `sizePt`, `source`) | any plugin that measured the page (an OCR read emits it when a document finishes reading) | that family and size become the defaults for new boxes |

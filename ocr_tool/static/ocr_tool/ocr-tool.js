@@ -146,17 +146,41 @@ function ocrLoadPageImage(pageNum) {
   });
 }
 
-// Set name ('timesbdlin16', 'cour13', union 'a+b') -> family/bold/italic.
+// Set name ('timesbdlin16', 'nimbus791', union 'a+b') -> the face it was
+// rendered from, from the generated engine/set-fonts.js (glyph-registry
+// PROVENANCE). A union name resolves through its first member; callers with
+// per-glyph src pass the majority set instead.
 function ocrFontFromSetName(name) {
-  const n = (name || '').split('+')[0].toLowerCase();
-  const m = n.match(/^(times|tnr8?|cour|courier|arial|georgia)(bd|i)?(lin)?[\d_]/);
-  const stem = m ? m[1] : '';
-  const family =
-    stem.startsWith('cour') ? 'Courier New' :
-    stem === 'arial' ? 'Arial' :
-    stem === 'georgia' ? 'Georgia' :
-    'Times New Roman';                       // times* / tnr*
-  return { family, bold: m?.[2] === 'bd', italic: m?.[2] === 'i' };
+  const first = (name || '').split('+')[0];
+  const f = typeof OCR_SET_FONTS !== 'undefined' ? OCR_SET_FONTS[first] : null;
+  return f ? { family: f.family, bold: !!f.bold, italic: !!f.italic }
+           : { family: 'Times New Roman', bold: false, italic: false };
+}
+
+// The set that drew most of a segment's glyphs (union lines mix faces —
+// a bold label, a regular value): per-glyph src, else the line's font label.
+function ocrMajoritySet(seg, fallback) {
+  const votes = new Map();
+  for (const e of seg) if (e.src) votes.set(e.src, (votes.get(e.src) || 0) + 1);
+  let best = null, n = 0;
+  for (const [s, c] of votes) if (c > n) { best = s; n = c; }
+  return best || fallback;
+}
+
+// After a read: the dominant face and size of the certified lines, told to
+// the text tool through the generic typography:detected event (fonts.js
+// selects it as the default for new boxes). Weighted by glyph count.
+function ocrEmitTypography() {
+  const tally = new Map();
+  for (const b of utbState.boxes) {
+    if (b.type !== 'ocr' || !b.ocr?.clean || !b.text) continue;
+    const k = `${b.fontFamily}|${Math.round(b.sizePt * 100) / 100}`;
+    tally.set(k, (tally.get(k) || 0) + b.text.replace(/\s+/g, '').length);
+  }
+  if (!tally.size) return;
+  const [key] = [...tally.entries()].sort((a, b) => b[1] - a[1])[0];
+  const [fontFamily, sizePt] = key.split('|');
+  PDFHooks.emit('typography:detected', { fontFamily, sizePt: +sizePt, source: 'ocr' });
 }
 
 // Rebuild per-char positions from a line's entries + transcription, walking
@@ -228,7 +252,6 @@ function ocrAddBoxes(pageNum, img, res, pass) {
     }
 
     const set = L.set;
-    const { family, bold, italic } = ocrFontFromSetName(L.font);
 
     // Which set drew each glyph: a union pool ('a+b') accepts glyphs from
     // several sets, and the engine records that on L.glyphs[].src. Carry it
@@ -265,6 +288,7 @@ function ocrAddBoxes(pageNum, img, res, pass) {
       const segLine = { text: L.text.slice(startOff, endOff),
         entries: seg.map(e => ({ ...e, i: e.i - startOff })) };
       const x0 = first.pen;
+      const { family, bold, italic } = ocrFontFromSetName(ocrMajoritySet(seg, L.font));
       // keep every field ocrCharPositions marks (lig/ligTail, src) — the pixel
       // view needs them; only the geometry is scaled into viewBox space
       const chars = ocrCharPositions(segLine, x0).map(cp => ({ ...cp, x: cp.x * sx, w: cp.w * sx }));
@@ -365,6 +389,7 @@ function ocrApplyCached(cached) {
   window.utbConnectRedactionsToLines?.();
   if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
   if (typeof calculateAllWidths === 'function') calculateAllWidths();
+  ocrEmitTypography();
   // same status wording as a live run, flagged as precomputed
   const lastPass = cached.pages[cached.pages.length - 1]?.pass || {};
   const cert = lastPass.tol ? `clean@±${lastPass.tol}` : 'byte-clean';
@@ -459,6 +484,7 @@ async function ocrRun(allPages) {
     window.utbConnectRedactionsToLines?.();
     if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
     if (typeof calculateAllWidths === 'function') calculateAllWidths();
+    ocrEmitTypography();
     if (lastPass) {
       const cert = lastPass.tol ? `clean@±${lastPass.tol}` : 'byte-clean';
       // a union pool's set name is 'a+b+…' — too noisy for the status line;

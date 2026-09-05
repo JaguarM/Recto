@@ -11,16 +11,10 @@ _DEFAULT_SCALE_FACTOR = geo.DEFAULT_SCALE / 100.0
 
 
 def _resolve_font_path(font_name):
-    """Search local and assets/fonts for a TTF file; return path or None."""
-    candidates = [
-        font_name,
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'fonts', font_name),
-        os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'fonts', font_name + '.ttf'),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return None
+    """A resolved path (the view resolves families through the catalogue) or a
+    bare file name in assets/fonts; None when nothing matches."""
+    from .fonts import resolve_file
+    return resolve_file(font_name)
 
 
 def get_text_widths(texts, font_name="times.ttf", font_size=12, force_uppercase=False, scale_factor=_DEFAULT_SCALE_FACTOR, kerning=True, space_width=None):
@@ -143,6 +137,7 @@ def get_justified_space_width(text, block_w, font_name="times.ttf", font_size=12
 
 
 def get_available_fonts():
+    """Legacy: the .ttf files in assets/fonts. The catalogue (fonts.families) is the real list."""
     font_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'assets', 'fonts')
     if os.path.exists(font_dir) and os.path.isdir(font_dir):
         return [f for f in os.listdir(font_dir) if f.lower().endswith('.ttf')]

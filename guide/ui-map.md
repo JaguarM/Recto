@@ -53,7 +53,7 @@ or toggled manually via `toggle-fmt`.
 
 | Group | Controls (id) | Wired in |
 |---|---|---|
-| Font | `fabric-font-family`, `fabric-font-size` | `text_tool/…/toolbar.js` |
+| Font | `fabric-font-family` (menu filled from the font catalogue by `text_tool/…/fonts.js`; preselected from the document's declared fonts or a plugin's `typography:detected`), `fabric-font-size` | `text_tool/…/toolbar.js` |
 | Style | `fabric-bold` / `fabric-italic` / `fabric-underline` / `fabric-strikethrough`, `fabric-color`, `kerning`, `fabric-nudge-mode` | `text_tool/…/toolbar.js` (nudge mode itself lives in `micro-typo.js`) |
 | Spacing | `fabric-letter-spacing`, `fabric-default-sw`, `fabric-space-width` (+ `-display`), `toggle-space-labels` | `text_tool/…/toolbar.js` |
 | Match (visible only while a redaction box is selected) | `tolerance`, `force-uppercase` | `text_tool/…/toolbar.js`; ids are also read by whichever matching plugin is installed — inert when none is |

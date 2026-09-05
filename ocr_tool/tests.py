@@ -27,6 +27,7 @@ OCR_TOOL_SCRIPTS = (
     'ocr_tool/engine/ocr-engine.js',
     'ocr_tool/engine/blindocr.js',
     'ocr_tool/engine/render.js',
+    'ocr_tool/engine/set-fonts.js',
     'ocr_tool/ocr-tool.js',
     'ocr_tool/pixel-view.js',
 )

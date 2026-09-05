@@ -56,29 +56,17 @@ const PV_MATCH_ALPHA = 0.32;             // diff mode: matching ink pixels are d
 const PV_BAND_REACH = 40;                // residual columns past a box's end (a missed trailing glyph)
 
 // Family/size lookup for boxes that were NOT read by the OCR (embedded text,
-// hand-added text): a set name is `<stem><style?><lin?><size>`; anything else
-// (g23 gray ink, 102mid, law, _page cuts) is a producer-specific variant and
-// is never picked by family — OCR boxes reach those through box.ocr.font.
-const PV_STEMS = [
-  ['segoeui', 'Segoe UI'], ['georgia', 'Georgia'], ['verdana', 'Verdana'], ['calibri', 'Calibri'],
-  ['cambria', 'Cambria'], ['tahoma', 'Tahoma'], ['times', 'Times New Roman'], ['tnr8', 'Times New Roman'],
-  ['tnr', 'Times New Roman'], ['arial', 'Arial'], ['cour', 'Courier New'],
-];
-// approximate space advances as a fraction of the em, used only when no
-// page-calibrated space (box.ocr.spaceAdv) is available for the box's set
-const PV_SPACE_EM = { 'Times New Roman': 0.25, 'Courier New': 0.6, 'Arial': 0.278, 'Georgia': 0.241,
-  'Tahoma': 0.313, 'Segoe UI': 0.274, 'Verdana': 0.352, 'Calibri': 0.226, 'Cambria': 0.22 };
+// hand-typed text): the face of every set comes from the generated
+// engine/set-fonts.js; only `plain` sets (stock face, stock law — not a
+// linear-compositor, gray-ink, recreated-law or specific-build variant) are
+// picked by family. OCR boxes reach the variants through box.ocr.font.
+const PV_SPACE_EM = { 'Times New Roman': 0.25, 'Nimbus Roman': 0.25, 'Courier New': 0.6, 'Nimbus Mono PS': 0.6,
+  'Arial': 0.278, 'Nimbus Sans': 0.278, 'Georgia': 0.241, 'Tahoma': 0.313, 'Segoe UI': 0.274, 'Verdana': 0.352,
+  'Calibri': 0.226, 'Cambria': 0.22, 'DejaVu Serif': 0.318, 'Century Schoolbook': 0.278 };
 
 function pvSetStyle(name) {
-  const n = (name || '').toLowerCase();
-  for (const [stem, family] of PV_STEMS) {
-    if (!n.startsWith(stem)) continue;
-    const m = n.slice(stem.length).match(/^(bd|b|i|z)?(lin)?_?(\d+)$/);
-    if (!m) return null;                                   // a variant set
-    return { family, bold: m[1] === 'bd' || m[1] === 'b' || m[1] === 'z',
-      italic: m[1] === 'i' || m[1] === 'z', linear: !!m[2] };
-  }
-  return null;
+  const f = typeof OCR_SET_FONTS !== 'undefined' ? OCR_SET_FONTS[name] : null;
+  return f ? { family: f.family, bold: !!f.bold, italic: !!f.italic, plain: !!f.plain } : null;
 }
 
 function pvSetByName(name) {
@@ -105,7 +93,7 @@ function pvSetsForBox(box) {
   const want = { family: box.fontFamily, bold: !!box.bold, italic: !!box.italic };
   const hit = sets.find(s => {
     const st = pvSetStyle(s.name);
-    return st && !st.linear && st.family === want.family && st.bold === want.bold &&
+    return st && st.plain && st.family === want.family && st.bold === want.bold &&
       st.italic === want.italic && Math.abs(s.sizePx - sizePx) < 0.02;
   });
   return hit ? { primary: hit, byName: new Map([[hit.name, hit]]), label: hit.name } : null;

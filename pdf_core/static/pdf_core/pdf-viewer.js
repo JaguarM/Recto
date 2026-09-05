@@ -8,20 +8,6 @@
       coordinates are in that pixel space throughout.
       ========================================================= */
 
-// Maps a .ttf filename (from the server) to the CSS font family name used in
-// the Fabric text-annotation toolbar.  Only the four supported fonts.
-function ttfToFabricFont(ttfName) {
-  const map = {
-    'times.ttf': 'Times New Roman',
-    'courier_new.ttf': 'Courier New',
-    'arial.ttf': 'Arial',
-    'calibri.ttf': 'Calibri',
-    'segoe_ui.ttf': 'Segoe UI',
-    'verdana.ttf': 'Verdana',
-  };
-  return map[ttfName] || null;
-}
-
 async function loadDocument(data, file) {
   state.pageImages = [];
   state.numPages = 0;
@@ -47,38 +33,20 @@ async function loadDocument(data, file) {
   await goToPage(1);
   renderThumbnails();
 
-  const autoScale = data.suggested_scale || GEO.DEFAULT_SCALE;
-  const autoSize = data.suggested_size || 12;  // points
-  const autoFont = data.suggested_font || null;
-
-  // Derive initial font family (CSS name)
-  let initialFontFamily = 'Times New Roman';
-  if (autoFont) {
-    const fabricFont = ttfToFabricFont(autoFont);
-    if (fabricFont) initialFontFamily = fabricFont;
-  }
-
-  // Sync fabric toolbar to the document's detected font/size. The font-size
-  // input holds POINTS (the canonical unit) — no DPI conversion here.
-  const fabricSel = document.getElementById('fabric-font-family');
-  if (fabricSel && Array.from(fabricSel.options).find(o => o.value === initialFontFamily)) {
-    fabricSel.value = initialFontFamily;
-    if (typeof textOptions !== 'undefined') textOptions.fontFamily = initialFontFamily;
-  }
-  const fabricSizeInput = document.getElementById('fabric-font-size');
-  if (fabricSizeInput) fabricSizeInput.value = autoSize;
+  const autoSize = data.suggested_size || 12;  // points, sampled by the server
 
   if (typeof renderAllTextLayers === 'function') renderAllTextLayers();
 
   // Lifecycle: let plugins react to a freshly loaded document. Plugins that add
   // their own boxes or overlays hang off this event — the core names none of
-  // them. `file === null` on the auto-loaded sample doc;
-  // `initialFontFamily`/`autoSize` are the document's detected typography, which
-  // box-creating plugins use as their defaults.
+  // them. `file === null` on the auto-loaded sample doc; `pdfFonts` are the
+  // document's declared BaseFont names (most used first) and `sizePt` its
+  // sampled body size — the facts a typography plugin turns into a default
+  // face (the core keeps no font list of its own).
   await PDFHooks.emit('document:loaded', {
     file,
     isDefault: !file,
-    fontFamily: initialFontFamily,
+    pdfFonts: data.pdf_fonts || [],
     sizePt: autoSize,
   });
 

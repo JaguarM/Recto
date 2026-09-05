@@ -24,13 +24,10 @@
 
   <div class="options-group">
     <div class="options-group-controls">
-      <select id="fabric-font-family" class="toolbar-select">
-        <option value="Arial">Arial</option>
-        <option value="Calibri">Calibri</option>
-        <option value="Courier New">Courier New</option>
-        <option value="Segoe UI">Segoe UI</option>
+      <!-- filled from the font catalogue by fonts.js (/fonts-list); the one
+           option here is the fallback until the catalogue arrives -->
+      <select id="fabric-font-family" class="toolbar-select" title="Font family — MuPDF's own faces first, then the Windows faces the OCR models">
         <option value="Times New Roman" selected>Times New Roman</option>
-        <option value="Verdana">Verdana</option>
       </select>
       <input type="number" id="fabric-font-size" value="12" min="1" max="400" step="0.05"
              title="Font size (pt)" class="toolbar-input-small" style="width: 64px;">

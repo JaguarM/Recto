@@ -64,9 +64,9 @@ recto/
 │   ├── urls.py
 │   ├── logic/
 │   │   ├── width_calculator.py     # HarfBuzz width measurement
-│   │   └── extract_fonts.py        # Dominant font detection
+│   │   └── fonts.py                # The font catalogue (assets/fonts/fonts.json): family → file
 │   ├── templates/                  # Toolbars injected via registry
-│   └── static/text_tool/           # unified-text-box.js, svg-renderer.js, etc.
+│   └── static/text_tool/           # fonts.js (catalogue → @font-face + font menu), unified-text-box.js, svg-renderer.js, …
 │
 ├── webgl_mask/                     # Plugin App (Visual GPU Masks)
 │   ├── tool.py                     # WebglMaskTool(PDFTool)
@@ -94,7 +94,7 @@ recto/
 │   └── logic/extract.py            # extract_pdf() / extract_spans_range() — imported by embedded_text_viewer.views
 │
 ├── assets/
-│   ├── fonts/                      # .ttf font files for width calculation
+│   ├── fonts/                      # fonts.json (the catalogue) + the face files it names: MuPDF's URW faces, DejaVu, the Windows faces the OCR models
 │   └── pdfs/                       # Startup document — the PDF here auto-loads on open
 │
 ├── guide/                          # Documentation (you are here)
@@ -238,7 +238,8 @@ fields, which sit inert when the plugin is gone. See [Unified Text Box](./unifie
 | `viewer:clear` | `pdf-viewer.js` (`goToPage`) | — | `webgl_mask` tears down GL contexts |
 | `page:rendered` | `pdf-viewer.js` (`goToPage`) | `{ pageContainer, pageNum }` | `webgl_mask` adds its overlay canvas; `text_tool` draws the SVG layer |
 | `pages:refresh` | `pdf-viewer.js` (`goToPage`) | — | `webgl_mask` re-syncs visible mask canvases |
-| `document:loaded` | `pdf-viewer.js` (`loadDocument`) | `{ file, isDefault }` | `webgl_mask` fetches masks; `embedded_text_viewer` fetches spans |
+| `document:loaded` | `pdf-viewer.js` (`loadDocument`) | `{ file, isDefault, pdfFonts, sizePt }` | `webgl_mask` fetches masks; `embedded_text_viewer` fetches spans; `text_tool` picks the default face from the declared fonts |
+| `typography:detected` | any plugin that measured the page's face (not the core) | `{ fontFamily, sizePt, source }` | `text_tool` selects that family/size as the default for new boxes |
 | `zoom:changed` | `ui-events.js` (`updateCSSZoom`) | `{ zoom }` | (available for plugins that need zoom-aware redraws) |
 
 The core never calls a plugin function by name and owns no plugin DOM. Plugins that contribute a subtoolbar register their toggle button with `window.registerSubtoolbar(button)` so the generic `openSubtoolbar` can manage it without naming the plugin.

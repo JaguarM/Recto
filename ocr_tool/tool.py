@@ -30,9 +30,10 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=b57d2c04'},
         {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=47a83b18'},
         {'path': 'ocr_tool/engine/render.js', 'version': 'v=b8199157'},
+        {'path': 'ocr_tool/engine/set-fonts.js', 'version': 'v=29e7faf6'},
         # the adapters (Recto-owned). ocr-result.js is shared with the reader's
         # Worker (ocr-worker.js, fetched by url from ocr-tool.js — not a page script)
         {'path': 'ocr_tool/ocr-result.js', 'version': 'v=2'},
-        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=8'},
-        {'path': 'ocr_tool/pixel-view.js', 'version': 'v=3'},
+        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=9'},
+        {'path': 'ocr_tool/pixel-view.js', 'version': 'v=4'},
     ]
