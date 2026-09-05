@@ -132,6 +132,14 @@ measured from the raster. Both fixture bars refine to `SARAH KELLEN`'s width
 from the embedded layer alone, and again — to the same edge — once OCR words
 that read `and` in full are added.
 
+## Next: verifying candidates against the page pixels
+
+Width cannot split names that tie to the font unit, and a half-exposed glyph is
+not a letter (`A` / `Æ`). The follow-up is a *candidate-driven* check — draw each
+width-fitting name where the refiner says it sits and let the page bytes outside
+the bar contradict it — designed in [pixel-evidence-plan.md](pixel-evidence-plan.md),
+with what it can and cannot do on the test document measured up front.
+
 ## Dependencies
 
 ```

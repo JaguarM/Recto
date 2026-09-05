@@ -1,0 +1,296 @@
+# Plan — verifying candidate names against the page pixels
+
+*Status: **proposed** 2026-09-05. Engine work lives in tol0 (`engine/`, certified
+there, synced verbatim); Recto only consumes verdicts. Every phase ends with the
+command that proves it, like [../ocr-tool/pixel-view-plan.md](../ocr-tool/pixel-view-plan.md).*
+
+## The premise: verify a list, never read a sliver
+
+A half-exposed glyph is not a letter. The left two columns of `A` are the left
+two columns of `Æ`; the visible top of `e` is the top of `é` minus an accent
+the bar may or may not have covered. The reader already knows this: LAWS §8
+accepts a glyph mostly under a box **only** when it is the *only* character in
+the whole pool that fits, and on the clip benchmark refusal is the common
+verdict (`open 1`: 15 right, 0 wrong, **360 refused** of 375 on Courier).
+Recognising letters from slivers is a search over 4,516 glyph records with
+almost no ink to constrain it. It cannot be made to work and this plan does
+not try.
+
+What *can* work is the same law run the other way round, over a short list:
+
+> Given the names that already fit the bar by width, draw each one where the
+> refiner says the hidden name sits — the line's own glyph set, baseline and
+> ¼-px pens — composite the bar over it exactly as the redactor did (LAWS §8,
+> bar last), and compare every page byte outside the bar's black body. A name
+> that predicts ink where the page is white, or white where the page has ink,
+> is **contradicted**. A name that reproduces every byte is **consistent**.
+> Two consistent names are a **tie**, and a tie is the answer (METHOD rule 6).
+
+The sliver never has to be identified. `A…` and `Æ…` are both drawn in full;
+if the bar hid the difference, both stay consistent and the tie is reported.
+The candidate list is what makes the comparison meaningful — which is why the
+list must be short first (below), and why this is a *verification* stage, not
+a reader.
+
+## What the test file says (measured 2026-09-05)
+
+`_temp_test_files/efta00018586.pdf`, the producer's own 816×1056 page image
+(LAWS §7), the two `including ███ and GHISLAINE MAXWELL` bars:
+
+| | bar 2 (item 2) | bar 1 (item 3) |
+|---|---|---|
+| black body | rows 681–707, cols 235–355 | rows 733–754, cols 321–442 |
+| line's ink rows (`and`) | 670–694 | 726–747 (baseline 747) |
+| body vs the name's caps | covers them fully | covers them fully, and 7 rows below the baseline |
+| top edge row | byte 196 (light) — but the dips in it are the **previous line's descenders**, not the name | rows 731–732: bytes 139 / 74 with dips — previous line's descenders again |
+| left edge | **`S` leaks**: cols 233–234 open, the rest under the edge; the reader reads it as `S` | col 320 is an edge of byte 56 (78 % covered); the name's first ink column sits under it |
+| right edge | edge byte 52; `and` starts at 357 | edge byte 56; `and` starts at 444 |
+
+So on this document pixels add **nothing beyond what already shipped**: bar 2's
+leaked `S` is the remnant the refiner already turns into a *starts with S*
+filter (unique → SARAH KELLEN), and bar 1 leaks no ink at all — a full-height
+body with dark edges, which §8 rightly refuses as evidence ("dark edges carry
+no evidence", the compositor's rounding is not the glyph's). Bar 1's six
+width-tied names (SARAH KELLEN, JUSTIN NELSON, TONY PODESTA, GÉRALD MARIE,
+NOOR SIDDIQUI, NICKI HASKELL) would all come back **no evidence**, and the tie
+stands until something outside the pixels breaks it (a typed filter, or the
+document-level consistency under *Later*).
+
+That is the honest scope: this stage breaks ties **where the redactor leaked
+ink** — a partial first/last glyph beside the bar, glyph tops or descenders
+above/below a bar shorter than the line, or a *light* (≥ 160) edge line
+carrying the hidden glyphs' composite. Across the corpus that is common (the
+clip benchmark and `report`'s clipped `S` are real cases); on a bar like item
+3 it is nothing, and the verdict must say so rather than guess.
+
+## What you will get
+
+In **All Matches**, every chip gets a verdict:
+
+- `✓` **consistent** — drawn at the name's position, every page byte outside
+  the body matches (to the line's own tolerance), and no page ink in the
+  name's window is left unexplained.
+- `✗` **contradicted** — with the pixel counts (`3 differ · 0 unexplained`).
+- `–` **no evidence** — the bar left no ink to compare (bar 1 above).
+
+Chips sort consistent first; the bar's label is the first consistent name;
+the counter reads `2 of 6 consistent`. Contradicted names stay visible (greyed)
+so a wrong elimination can be seen and overridden by clicking. Nothing is
+hidden, nothing is decided from a sliver.
+
+## Why it is cheap now
+
+| Piece | Where it already is | What it gives us |
+|---|---|---|
+| Forward renderer | tol0 `engine/render.js`: `layoutLine`, `renderLine`, `diffLine`, `objectMask`, `residualInk` | Draw a candidate string on the ¼-px lattice with the line's set and composite through the certified blend law |
+| The bar model | LAWS §8 + `detectObjects`' EDGE MODEL in `engine/ocr-engine.js` | Body = 0, edge cell = `(gb·k)>>8`, open page = `gb`, bar drawn **last**; linear-law variant verified byte for byte on `report`'s clipped `S` |
+| Which set, baseline, y-phase, tolerance, space | Every OCR segment's `box.ocr` (`font`, `baseline`, `phy`, `tol`, `spaceAdv`) and its `baseCharPositions` (the reader's pens) | The hidden name shares its line's set, baseline and phase — the prediction is byte-exact by construction, not fitted |
+| Where the name sits | `redaction_refiner`: `box.refineInfo` (neighbour words, their spans, the name's x-range) | `pen0` = left neighbour's last pen + advance + the line's space |
+| Page bytes, whitening, palette, box mask | `ocr_tool/static/ocr_tool/pixel-view.js` (`pvPageInfo`: page, `det`, `quant`) | The same bytes the reader certified against, already in memory |
+| The short list and the chips | `redaction_matching`: `getBoxMatches`, `setBoxMatch`, the chip renderer, the `redaction:refined` hook | Somewhere to put a verdict, and a signal to invalidate it |
+| Certification harness | tol0 `tools/clip-bench.mjs`, `ftclone/certify-render.mjs` | Paints boxes over known glyphs bar-last through the law and counts right / wrong / refused per leak — the exact shape of proof this needs |
+
+The one thing that does not exist is the hypothesis test itself: *compose a
+string with a bar over it and judge it against the page*. It goes in tol0
+(`engine/hypothesis.js`) so it can be certified before Recto runs it.
+
+## Design
+
+### 0. Narrow the list first (Recto, no pixels)
+
+Comparing pixels for 62 names is waste; comparing for 6 is a verdict. Three
+things already shrink the list, one is new:
+
+- **Exact pens instead of a pixel tolerance** *(new)*. The reader's pens on
+  the line are exact (§1, §6): `pen0 = penEnd(left word) + space_line`, and a
+  candidate must satisfy `|pen0 + advanceW(candidate) + space_line − pen(right
+  word)| ≤ ¼ px` (each pen snaps to the lattice). `space_line` is **this
+  line's own** inter-word space — median of its measured gaps minus advances,
+  which is what a justified line stretches — falling back to the page's
+  `spaceAdv` when the line has fewer than two other gaps, and to *rank only*
+  (METHOD rule 8) when a justified line has none. On bar 1 that is `128.5 =
+  name + 2 × 4.0` → 120.5 ± 0.25 px → **6 names instead of 62**. `advanceW`
+  comes from `layoutLine` with the line's set, so it is the same arithmetic
+  the renderer will use.
+- **Remnants** (`redaction:refined` → starts-with / ends-with) — shipped.
+- **The typed filter** — shipped.
+- **Document-level consistency** — *Later*.
+
+### 1. `engine/hypothesis.js` (tol0, DOM-free, synced verbatim)
+
+One pure function beside `render.js`:
+
+```
+testHypothesis(page, det, set, line, box, text, opts)
+  page  {w, h, gray}        whitened page (LAWS §5), palette-quantized producers pass opts.quant
+  det   detectObjects(page) the box objects and edge model
+  set   the line's glyph set (union lines: per-glyph src, as pixel-view does)
+  line  {baseline, phy, tol, spaceLine, penLeft, penRight}   from the row's OCR segments
+  box   the detected box object overlapping the bar (x0,x1,y0,y1 + edge bytes)
+  text  the candidate
+→ { verdict: 'consistent' | 'contradicted' | 'no-evidence',
+    pens, advanceW, penFit,            // the §0 equation, in px
+    open:   {ink, match, differ},      // pixels on the open page
+    edge:   {ink, match, differ},      // light-edge composites (byte ≥ 160)
+    dark:   {ink},                     // dark-edge / body pixels — counted, never judged
+    unexplained,                       // page ink in the window no glyph explains
+    mism }                             // for a diff overlay
+```
+
+Steps, each one an existing law:
+
+1. **Layout.** `layoutLine(set, text, pen0, {spaceAdv: spaceLine})`; missing
+   glyphs → `no-evidence` with `missing` (never approximated).
+2. **Render.** `renderLine(set, glyphs, baseline, {phy})` → predicted bytes
+   over white, `gray`.
+3. **Composite the bar, bar last** (§8): for every pixel of the window —
+   body → 0; edge cell with complement `k` → `(gray·k)>>8`; open → `gray`.
+   Linear sets use the linear product with the light-contributor shift, the
+   same code path `renderLine` already has for glyph-over-glyph. `k` per edge
+   cell comes from the edge byte itself: `(255·k)>>8 = edge`.
+4. **Compare** on the window `[pen0 − 2, penEnd + 2] × the line's band`, every
+   pixel, not only ink: predicted vs page, `|Δ| ≤ tol` (2·tol on composite
+   pixels — scanLine's rule), through `quant` when the page was palettized.
+   Classify each pixel by the bar model: open / light edge / dark-or-body.
+5. **Residual** the other way (the second half of the certificate, exactly as
+   `residualInk`): page ink in the window that neither the candidate nor the
+   bar explains.
+6. **Verdict.** `contradicted` if any open pixel differs or any ink is
+   unexplained; else `consistent` if `open.ink + edge.ink ≥ minInk`
+   (default 12 — the "little ink fits many glyphs" floor from §8, applied to
+   the *whole string*, not one glyph); else `no-evidence`. Light-edge
+   composites judge like open pixels — they are the prior ink the reader
+   already composites against; a light-edge-only verdict is reported with
+   `edgeOnly: true` so the UI can show it fainter. Dark edges never judge
+   (§8, and *shadow* stays opt-in as in the reader).
+
+Nothing here is a threshold to tune: tolerance is the line's own, the floor is
+the reader's, and the classification is the measured edge model.
+
+### 2. Certification (tol0)
+
+`tools/hypothesis-bench.mjs`, from `clip-bench.mjs`: on a certified page, pick
+a word, paint a black box over it bar-last through the law with edges 196 ·
+165 · 119 · 74 · 52 and leaks `open 0 / 1 / 2` columns each side, and at each
+setting run `testHypothesis` over a list = **the truth + every string in the
+page's vocabulary whose `advanceW` ties it within ¼ px** (the same equation as
+§0; on a Times page that list is rarely empty). Count, per setting:
+
+| truth consistent | truth contradicted | decoys contradicted | ties |
+|---|---|---|---|
+| must be 100 % | **must be 0** — the gate | the number this feature is worth | reported, never resolved |
+
+Two named cases must be in `test/hypothesis.test.js`: a synthetic page with
+`A…` and `Æ…` under a bar leaving two open columns (both consistent, tie
+reported — the premise of this plan, asserted), and the §8 page (`A` under a
+187 edge) with the truth plus one decoy of equal advance. Then the corpus
+gate: `npm run gate` must not change by a byte (the engine's read path is
+untouched — this file is called only by Recto).
+
+### 3. Sync and the Recto adapter
+
+- tol0 `tools/sync-recto.mjs`: add `hypothesis.js` to `ENGINE_FILES`.
+- `ocr_tool/static/ocr_tool/pixel-view.js` (or a sibling `hypothesis-view.js`,
+  registered after it in `ocr_tool/tool.py`): define the guarded seam
+  `window.ocrTestHypothesis(box, text) → verdict | null`. It resolves, from
+  `box.refineInfo`: the neighbour words' spans → their `ocr` records (set via
+  `pvSetsForBox`, baseline, `phy`, `tol`, pens), `spaceLine` from the row's
+  pens, `pen0`/`penRight`; the page via `pvPageInfo(page)` (already whitened,
+  with `det` and `quant`); the box object as the `det.objects` entry of type
+  `box` overlapping the bar. Returns `null` when the row has no OCR segments
+  (embedded-only rows carry no set), when no set is shipped for the face, or
+  when the bar has no detected object — every `null` names its reason in the
+  status line, like the pixel view's fallbacks.
+- `redaction_matching/static/redaction_matching/api.js`: after
+  `calculateWidthsForRedaction`, for each name in `getBoxMatches(box)` call the
+  seam when it exists (`typeof ocrTestHypothesis === 'function'`), store
+  `box.verdicts[name]`, and render chips `✓ / ✗ / –` with the counts in the
+  title; `shownMatch` prefers consistent names; the `redaction:refined` hook
+  and any width recompute clear `box.verdicts`. The §0 exact-pen filter goes in
+  `getBoxMatches` when the row has pens, else the tolerance as today.
+
+### 4. Corpus proof (Recto + tol0)
+
+`tools/verify-redactions.mjs` in tol0 (sibling of `verify-recto-pixels.mjs`):
+over `_temp_test_files`, for every detected bar with a candidate list, log the
+list size after width, after §0, and the verdict counts. Assert on
+`efta00018586`: bar 2 → SARAH KELLEN consistent, the other five contradicted
+by the open `S` columns; bar 1 → six `no-evidence`, tie kept. The report is
+the feature's value in numbers: how many bars across the corpus end unique,
+tied, or without evidence.
+
+## Phases and how each one is proven
+
+### Phase 0 — exact pens (Recto only, no engine work)
+
+Files: `redaction_matching/…/api.js` (`getBoxMatches`), a Node test beside the
+refiner's (`tests_js/`) using the fixture's OCR pens.
+
+```bash
+cd C:/Users/yanni/Desktop/Recto
+python manage.py test redaction_matching redaction_refiner   # expect: item 3 lists 6 names, not 62
+```
+
+### Phase 1 — `hypothesis.js` + certification (tol0)
+
+Files: `engine/hypothesis.js`, `test/hypothesis.test.js`,
+`tools/hypothesis-bench.mjs`, `package.json` (`bench:hypothesis`).
+
+```bash
+cd C:/Users/yanni/Desktop/tol0
+npm test                    # A/Æ tie asserted; §8 page: truth consistent, decoy contradicted
+npm run bench:hypothesis    # truth contradicted: 0 at every edge × leak; print the decoy table
+npm run gate                # unchanged by a byte
+```
+
+### Phase 2 — sync, adapter, chips (Recto)
+
+```bash
+cd C:/Users/yanni/Desktop/tol0 && npm run sync:recto
+cd C:/Users/yanni/Desktop/Recto
+python manage.py test ocr_tool redaction_matching redaction_refiner
+python debug_out/smoke.py   # bar 2: "1 of 6 consistent" → SARAH KELLEN; bar 1: "0 of 6 · no evidence"
+```
+
+### Phase 3 — corpus report and docs
+
+```bash
+cd C:/Users/yanni/Desktop/tol0 && node tools/verify-redactions.mjs --max-pages 5
+```
+
+Then: this plan gets a *What changed while building it* section, the refiner
+and ocr-tool READMEs get the seam and the chip verdicts, tol0's LAWS gets a
+§8 paragraph on string hypotheses if the bench teaches anything new.
+
+## Limits, stated up front
+
+- **No leak, no verdict.** A full-height body with dark edges (bar 1) yields
+  `no-evidence` for every candidate. The UI must show that as a tie, not as
+  a match.
+- **The list must contain the truth.** `consistent` means *not contradicted by
+  the page*, never *proven*. A name absent from the pool cannot be found.
+- **Producer rasters only.** The whole chain is byte-exact because these pages
+  are the producer's own MuPDF rasters (LAWS §7). A true scan gets no set, no
+  certificate, and `null` from the seam.
+- **Faces without a shipped set** fall back to `null` and say so, as the pixel
+  view does.
+- **Cost is fine.** `renderLine` is milliseconds; six names per bar is nothing;
+  sixty-two would still be under a second — but only after §0, so the verdict
+  list stays readable.
+
+## Later
+
+- **Document-level consistency.** The same person is redacted many times in
+  one document, in different contexts: a full name here, a first name alone
+  there, `Ms. ███` elsewhere. Intersecting the candidate lists of bars that
+  share a person (same width *and* same surrounding context, or a first-name
+  bar whose width matches a full-name bar's first word) narrows every one of
+  them without a pixel. Bar 1 and bar 2 here share width and context; a rule
+  "same width, same line context, same document → same list" would carry
+  bar 2's `S` to bar 1. Powerful, and a *prior*, so it must be shown as such.
+- **Bar-padding prior.** Redactors pad consistently (here: the name plus its
+  trailing space, edges 52–56). Learned per document from bars with a unique
+  answer, it tightens the width equation for the rest.
+- **Shadow reads, opt-in.** Under `--shadow`, dark-edge composites judge too
+  (§8's benchmark: never wrong synthetically, wrong on real boxes). With a
+  six-name list the odds change; measure before enabling.
