@@ -60,7 +60,7 @@ anything to work on.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar (name format, starts-with / ends-with filter, matches table) | *(none — fully client-side)* |
+| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar (name format, starts-with / ends-with filter, matches table). Names that tie on width are all listed — click one or press `[` / `]` to choose the bar's label | *(none — fully client-side)* |
 
 ## Redaction refiner
 
