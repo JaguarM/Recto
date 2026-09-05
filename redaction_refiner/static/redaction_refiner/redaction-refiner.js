@@ -121,6 +121,23 @@
 
   const DICT_URL = '/static/redaction_refiner/words.txt';
 
+  // Sentence spacing. A typed memo may put TWO spaces after a sentence-ending
+  // mark ("incident.  The same day" — a 9 px gap where a word gap is 5 on the
+  // reference page), and a bar that opens a sentence ("plane. [Bledsoe] said")
+  // starts that far in: read as one space, that bar came out a space too wide
+  // with reader pens on both sides. The convention is measured per page from
+  // the pens: the gap between a sentence-ending mark and the capital after it,
+  // in the row's spaces, median over the page's sentence boundaries. A mark
+  // after an abbreviation ("Dr.", an initial) ends no sentence.
+  const SENTENCE_END_RE = /[.?!]/;
+  const ABBREVIATIONS = new Set([
+    'dr', 'mr', 'mrs', 'ms', 'jr', 'sr', 'st', 'no', 'vs', 'etc', 'inc', 'ltd', 'co', 'corp',
+    'prof', 'gen', 'capt', 'sgt', 'lt', 'col', 'rev', 'hon', 'mt', 'ft', 'ave', 'blvd', 'dept',
+    'est', 'approx', 'us', 'uk', 'eg', 'ie', 'am', 'pm',
+    'jan', 'feb', 'mar', 'apr', 'jun', 'jul', 'aug', 'sep', 'sept', 'oct', 'nov', 'dec',
+  ]);
+  const MIN_SENTENCE_SAMPLES = 2;
+
   // ── Dictionary ─────────────────────────────────────────────
   // words.txt: one lowercase word per line, most frequent first (see
   // words_build.py). `list` keeps that order for ranking completions; `set` is
@@ -227,6 +244,45 @@
     const glued = /[\p{L}\p{N}]/u.test(rest);
     if (PUNCT_MEDIAL.test(ch)) return glued;             // "co-" is a compound
     return !glued;                                       // a quote: glued = closed
+  }
+
+  // Does the mark ending `run` end a sentence? Not after an abbreviation or a
+  // single-letter initial ("Dr.", "J."); a number does ("in 2002.").
+  function isSentenceEnd(run) {
+    const mark = run[run.length - 1];
+    if (!SENTENCE_END_RE.test(mark || '')) return false;
+    const before = run.slice(0, -1).replace(/[^\p{L}\p{N}]/gu, '');
+    if (/^\p{L}$/u.test(before)) return false;
+    return !ABBREVIATIONS.has(before.toLowerCase());
+  }
+
+  // How many spaces this page puts after a sentence, measured from the spans
+  // of `type` on it (1 when too few sentence boundaries can be read). A walk
+  // over the page's characters — cheap enough to redo per bar.
+  function sentenceSpaces(page, type) {
+    if (typeof utbState === 'undefined') return 1;
+    const spans = utbState.boxes.filter((b) => b.page === page && b.type === type && usableSpan(b)
+      && Array.isArray(b.baseCharPositions) && b.baseCharPositions.length);
+    const ratios = [];
+    for (const span of spans) {
+      const cps = span.baseCharPositions;
+      const spaceWs = cps.filter((cp) => cp.c === ' ' && cp.w > 0).map((cp) => cp.w);
+      if (!spaceWs.length) continue;
+      const space = median(spaceWs);
+      for (let i = 0; i < cps.length; i++) {
+        if (!SENTENCE_END_RE.test(cps[i].c || '')) continue;
+        let k = i;
+        while (k > 0 && cps[k - 1].c && cps[k - 1].c.trim()) k--;
+        const run = cps.slice(k, i + 1).map((cp) => cp.c).join('');
+        if (!isSentenceEnd(run)) continue;
+        let j = i + 1;
+        while (j < cps.length && !(cps[j].c || '').trim()) j++;
+        if (j === i + 1 || j >= cps.length || !/\p{Lu}/u.test(cps[j].c)) continue;
+        const gap = cps[j].x - (cps[i].x + cps[i].w);
+        if (gap > 0) ratios.push(gap / space);
+      }
+    }
+    return ratios.length >= MIN_SENTENCE_SAMPLES ? Math.min(2, Math.max(1, Math.round(median(ratios)))) : 1;
   }
 
   function facingToken(text, side) {
@@ -533,12 +589,15 @@
                  token: facing, inkEdge, space: 0, partial };
       }
       // The mark belongs to the text behind it, so a real space separates it
-      // from the hidden word — sized like any other inter-word space on the row.
+      // from the hidden word — sized like any other inter-word space on the
+      // row; two of them when the mark ends a sentence and the page spaces
+      // sentences that way ("plane. [Bledsoe] said").
       const natural = await naturalSpaceWidth(word.span);
       const space = rowSpaceWidth(spans, natural);
-      const edge = side === 'left' ? inkEdge + space : inkEdge - space;
+      const spaces = side === 'left' && isSentenceEnd(run) ? sentenceSpaces(box.page, word.span.type) : 1;
+      const edge = side === 'left' ? inkEdge + space * spaces : inkEdge - space;
       return { edge, wordEdge: edge, kind: 'punct', reason: 'spaced',
-               token: facing, inkEdge, space, partial };
+               token: facing, inkEdge, space, spaces, partial };
     }
 
     const natural = await naturalSpaceWidth(word.span);
@@ -690,7 +749,7 @@
   window.RedactionRefiner = {
     setDictionary, loadDictionary, isWord, completions, hiddenPart, facingToken,
     caseOf, classifyToken, rowWords, neighboursFor, isRemnant, rowSpaceWidth, resolveEdge,
-    siblingBars,
+    siblingBars, isSentenceEnd, sentenceSpaces,
     facingRun, punctBindsToward,
     refineRedaction, refineAllRedactions,
   };

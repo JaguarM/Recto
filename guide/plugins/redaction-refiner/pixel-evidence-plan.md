@@ -314,6 +314,18 @@ session builds, in order, and the contract it plugs into:
 5. **`tools/verify-redactions.mjs`** — *Design §4*; assert the reference page
    (bar 2 unique, bar 1 six-way `no-evidence`).
 
+Two inputs the refiner now supplies that the seam's own estimate does not
+know (EFTA00038617, Calibri, 2026-09-05): a bar that opens a sentence on a
+page that double-spaces its sentences starts **two** spaces after the period
+(`refineInfo.left.spaces === 2`, and `left.edge` already includes it — the
+engine's `line.pen0` input is the place to hand it over; `penLeft +
+spaceLine` puts `Bledsoe` a space too far left after `plane.`); and a
+neighbour the bar partly covers is `partial`, its pen a sliver reading. On
+that page the seam contradicts `Gregory Bledsoe` on one unexplained pixel
+with a page-metric advance of 107.02 px against 107.44 px from the font, and
+returns `consistent` for all 73 names in range on the clean `Richard
+Barnett` bar, where `no-evidence` would be honest.
+
 ## Limits, stated up front
 
 - **No shadow, no verdict.** A body whose edge columns carry no shadow of the

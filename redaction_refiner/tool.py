@@ -25,5 +25,5 @@ class RedactionRefinerTool(PDFTool):
     """
     name = 'redaction_refiner'
     scripts_after_app = [
-        {'path': 'redaction_refiner/redaction-refiner.js', 'version': 'v=5'},
+        {'path': 'redaction_refiner/redaction-refiner.js', 'version': 'v=6'},
     ]

@@ -96,8 +96,18 @@ the right):
     through: the `(` behind the quote in `("███` is not a word, so the quote
     still opens.
 
-  A spaced mark is sized like any other inter-word space on the row. The verdict
-  is on `box.refineInfo`, as `kind: 'punct'` with `reason: 'abuts' | 'spaced'`.
+  A spaced mark is sized like any other inter-word space on the row — **two**
+  of them when the mark ends a sentence and the page spaces its sentences that
+  way. A typed memo often does (`incident.  The same day`: a 9 px gap where a
+  word gap is 5 on the reference page), so a bar that opens a sentence
+  (`plane. [Bledsoe] said`) starts two spaces in; read as one, that bar came
+  out a space too wide with reader pens on both sides. The convention is
+  measured per page from the pens (the gap after a sentence-ending mark to the
+  capital that follows, in the row's spaces, median over the page's sentence
+  boundaries; two readable boundaries at least, else one space). A mark after
+  an abbreviation or an initial (`Dr.`, `J.`, `U.S.`) ends no sentence; a
+  number does. The verdict is on `box.refineInfo`, as `kind: 'punct'` with
+  `reason: 'abuts' | 'spaced'` and `spaces: 1 | 2`.
 - **A whole word** means a real inter-word space sits in the gap, so the edge is
   redrawn **one space-width in** from where the neighbour begins. A token is a
   whole word when it is in the shipped English list (`words.txt`, possessives and

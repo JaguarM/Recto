@@ -362,6 +362,58 @@ test('a comma the bar covers most of is still the neighbour — and the edge is 
   assert.equal(box3.refineInfo.exact, true);
 });
 
+test('a bar opening a sentence starts two spaces in when the page spaces sentences that way', async () => {
+  // Rows elsewhere on the page: "incident.  The" and "seized.  There" with
+  // two spaces; "Dr. Gregory" with one (an abbreviation, not a sentence end).
+  const cpsOf = (text) => {
+    const cps = []; let x = 0;
+    for (const c of text) { const w = c === ' ' ? SPACE : widthPx(c, 12); cps.push({ c, x, w }); x += w; }
+    return cps;
+  };
+  const ocr = (f) => span({ type: 'ocr', ocr: { clean: true }, ...f });
+  const row = (text, y) => ocr({ text, x: 100, y, w: cpsOf(text).reduce((s, cp) => s + cp.w, 0), baseCharPositions: cpsOf(text) });
+  const setup = (double) => {
+    reset();
+    const two = double ? '  ' : ' ';
+    utbState.boxes.push(row(`without incident.${two}The same day, a warrant`, 100));
+    utbState.boxes.push(row(`items were seized.${two}There was a number`, 200));
+    utbState.boxes.push(row('interviewed Dr. Gregory by telephone', 300));
+  };
+  setup(true);
+  assert.equal(R.sentenceSpaces(1, 'ocr'), 2);
+  assert.equal(R.isSentenceEnd('plane.'), true);
+  assert.equal(R.isSentenceEnd('2002.'), true);
+  assert.equal(R.isSentenceEnd('Dr.'), false);
+  assert.equal(R.isSentenceEnd('J.'), false);
+  assert.equal(R.isSentenceEnd('U.S.'), false);
+  assert.equal(R.isSentenceEnd('plane,'), false);
+  // "plane. [Bledsoe] said" — the bar opens a sentence: two spaces in.
+  const plane = ocr({ text: 'plane.', x: 300, w: widthPx('plane.', 12), baseCharPositions: charsFor('plane.') });
+  const said = ocr({ text: 'said', x: 300 + widthPx('plane.', 12) + 2 * SPACE + widthPx('Bledsoe', 12) + SPACE, w: widthPx('said', 12), baseCharPositions: charsFor('said') });
+  const bar = redaction(inkEnd(plane) + 4, said.x - 2);
+  utbState.boxes.push(plane, said, bar);
+  await R.refineRedaction(bar);
+  assert.equal(bar.refineInfo.left.spaces, 2);
+  near(bar.x, inkEnd(plane) + 2 * SPACE, 0.01, 'two spaces after the sentence');
+  near(bar.w, widthPx('Bledsoe', 12), 0.01, 'the bar is exactly the name');
+  assert.equal(bar.refineInfo.exact, true);
+  // "Dr. [Gregory Bledsoe] by" — an abbreviation: one space.
+  const dr = ocr({ text: 'Dr.', x: 300, y: 400, w: widthPx('Dr.', 12), baseCharPositions: charsFor('Dr.') });
+  const by = ocr({ text: 'by', x: 420, y: 400, w: widthPx('by', 12), baseCharPositions: charsFor('by') });
+  const bar2 = redaction(inkEnd(dr) + 3, 416, 400);
+  utbState.boxes.push(dr, by, bar2);
+  await R.refineRedaction(bar2);
+  assert.equal(bar2.refineInfo.left.spaces, 1);
+  near(bar2.x, inkEnd(dr) + SPACE, 0.01, 'one space after "Dr."');
+  // A page that single-spaces its sentences: one space.
+  setup(false);
+  assert.equal(R.sentenceSpaces(1, 'ocr'), 1);
+  utbState.boxes.push(plane, said, bar);
+  await R.refineRedaction(bar, { force: true });
+  assert.equal(bar.refineInfo.left.spaces, 1);
+  near(bar.x, inkEnd(plane) + SPACE, 0.01, 'one space when the page single-spaces');
+});
+
 test('siblingBars sees only bars sharing the row', () => {
   reset();
   const A = redaction(130, 200, 0);
