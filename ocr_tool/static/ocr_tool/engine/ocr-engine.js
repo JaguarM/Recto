@@ -1890,9 +1890,21 @@
       };
       const xpd = denseStart(colInk, x0, x1);
       const xp = xpd < 0 ? x0 : xpd;                     // no ink at all: x0 (== page.w)
-      // objects sharing rows with this band (reported per line; space gaps
-      // spanning them are suppressed)
+      // objects sharing rows with this band (reported per line). L.boxes is
+      // the REDACTION boxes among them, padded ±2 like the mask: the callers'
+      // text builders split a line at them (Recto: two text boxes, one per
+      // side; the transcripts: one separator space). Rules stay out — an
+      // underline under a word must never cut the word.
       const lineObjects = objects.filter(ob => ob.y0 < bot + 4 && ob.y1 > top - 4);
+      // …and only the boxes that cover THIS line's x-height (the row 4 px
+      // above its baseline): lineObjects reaches 4 rows past the band, and a
+      // band's own descender rows touch the next line's bar, so a bar from
+      // the neighbouring line was listed here too and the split rule cut
+      // "30 Nov" into "3 0 Nov" wherever it started between two pens.
+      // Unread bands (no baseline) keep every box overlapping their rows.
+      const lineBoxes = (obs, yb) => obs.filter(ob => ob.type === 'box' &&
+        (yb == null ? ob.y0 < bot && ob.y1 > top : ob.y0 <= yb - 4 && ob.y1 > yb - 4))
+        .map(ob => [ob.x0 - 2, ob.x1 + 2]);
       // fast path (mirrors the app): most documents use ONE (font, y-phase)
       // throughout — try the previous band's winner first and accept it when
       // its probe fully reads; fall back to the full sweep otherwise
@@ -2078,7 +2090,7 @@
             for (let x = x0; x <= x1; x++) if (page.gray[off + x] < 255 && !mask[off + x] && page.converted[off + x]) colN++; }
         lines.push({ top, bot, baseline: null, glyphs: [],
           fails: fragOnly || x1 < x0 ? [] : [x0], fragOnly, colour: colN * 2 >= inkN,
-          residual: 0, boxes: lineObjects.map(ob => [ob.x0 - 2, ob.x1 + 2]), objects: lineObjects, set: null });
+          residual: 0, boxes: lineBoxes(lineObjects, null), objects: lineObjects, set: null });
       };
       if (!pick) { pushUnread(); continue; }
       // stacked band: fresh ink remains ABOVE this line's scan window — that
@@ -2167,7 +2179,7 @@
           ? [...votes.entries()].sort((a, b) => b[1] - a[1])[0][0]
           : pick.set.name;
       }
-      L.boxes = lineObjects.map(ob => [ob.x0 - 2, ob.x1 + 2]);
+      L.boxes = lineBoxes(lineObjects, pick.yb);
       L.objects = lineObjects;
       // strike-through: a rule crossing the line's x-height voids the struck
       // span — text under the bar is deliberately not transcribed, so glyph
@@ -2434,7 +2446,22 @@
       pens: pens.map(p => [p.C[0], p.C[1], p.C[2], p.c]) };
   }
 
-  const api = { unionSets, quantMap, detectObjects, findBands, anchorGroups,
+  // Does a redaction box separate two consecutive glyphs? `boxes` are a
+  // line's padded [x0, x1] redaction rects (L.boxes). The box must START
+  // between the two pens and REACH past the previous glyph's advance — a
+  // quote flush against a bar overlaps the bar by half a pixel and a clipped
+  // glyph's advance runs on under it, so "the box fits inside the gap" (the
+  // old test) failed exactly on the lines that matter and left runs of
+  // measured spaces where the bar is. Callers split the line's text here:
+  // Recto into two boxes, the transcripts into one separator space.
+  // The bar's own left edge (bx[0] + 2 — L.boxes are padded) is what must
+  // lie between the pens: a left-clipped glyph's pen sits within 2 px of
+  // the bar, and the padded edge would fall before it.
+  function boxBetween(boxes, prev, next) {
+    return boxes.some(bx => bx[0] + 2 >= prev.pen && bx[0] + 2 < next.pen && bx[1] > prev.pen + prev.adv);
+  }
+
+  const api = { unionSets, quantMap, detectObjects, findBands, anchorGroups, boxBetween,
     CHAIN_PROBES, scanLine, probeBaseline, spaceCalib, readPage, colourInk, snapConverted };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OCREngine = api;

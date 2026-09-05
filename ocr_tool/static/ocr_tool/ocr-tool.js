@@ -269,15 +269,16 @@ function ocrAddBoxes(pageNum, img, res, pass) {
     const h = (set.maxAsc + set.maxDesc) * sy;
     const y = L.baseline * sy - (h * 0.85 - 1.3);
 
-    // A redaction box interrupting the line splits it into separate text
-    // boxes, each anchored at its own measured pen (the segment after a box
-    // must not ride as trailing chars of the segment before it). Same gap
-    // predicate the engine used to insert the separator space in lineEntries.
+    // A redaction box interrupting the line ALWAYS splits it into separate
+    // text boxes, one per side, each anchored at its own measured pen and
+    // carrying no separator spaces (the segment after a box must not ride as
+    // trailing chars of the segment before it). The predicate is the
+    // engine's boxBetween — the one that put the single separator space into
+    // L.text — so the two views can never disagree about where a bar is.
     const rects = L.boxes ?? [];
     const segs = [[L.entries[0]]];
     for (let i = 1; i < L.entries.length; i++) {
-      const a = L.entries[i - 1].pen + L.entries[i - 1].adv, b = L.entries[i].pen;
-      if (rects.some(bx => bx[0] >= a - 2 && bx[1] <= b + 2)) segs.push([]);
+      if (BlindOCR.boxBetween(rects, L.entries[i - 1], L.entries[i])) segs.push([]);
       segs[segs.length - 1].push(L.entries[i]);
     }
 

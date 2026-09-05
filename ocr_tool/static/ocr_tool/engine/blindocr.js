@@ -200,7 +200,7 @@
       if (i) {
         const a = entries[i - 1].pen + entries[i - 1].adv, b = entries[i].pen;
         const gap = b - a;
-        if (boxes.some(bx => bx[0] >= a - 2 && bx[1] <= b + 2)) text += ' ';
+        if (Engine.boxBetween(boxes, entries[i - 1], entries[i])) text += ' ';   // a redaction box: one separator, never measured spaces
         else if (spaceAdv && gap > 0.55 * spaceAdv) text += ' '.repeat(Math.max(1, Math.round(gap / spaceAdv)));
       }
       entries[i].i = text.length;
@@ -322,7 +322,7 @@
     return { res: best.res, pass: best.pass };
   }
 
-  const api = { loadSets, readPage, readPageAuto, blindPasses, passLabel,
+  const api = { loadSets, readPage, readPageAuto, blindPasses, passLabel, boxBetween: Engine.boxBetween,
     detectObjects: Engine.detectObjects, findBands: Engine.findBands,
     scanLine: Engine.scanLine, whitenColored, quantMap: Engine.quantMap, snapConverted: Engine.snapConverted,
     unionSets: Engine.unionSets };
