@@ -18,6 +18,21 @@ so the bar grows over it and the next word out is the neighbour. Remnants are
 announced on the `redaction:refined` event (below) — they are the hidden name's
 own first/last letters, which a matcher can use as a filter.
 
+### Adjacent bars
+
+A bar **never looks past another redaction bar on its row**. Two bars a space
+apart are usually the two halves of one name (`for ███ ███ traveling`), and the
+text beyond a sibling says nothing about this bar's extent. Without that bound
+each bar of a pair measures against the word on the far side of the other,
+stretches across it, and — since the sibling does the same in reverse — the pair
+collapses onto one span, so the same stretch of page is scored twice.
+
+A word *between* the bar and its sibling is still legitimate evidence
+(`███ and ███`). Only when there is no word in between does the edge keep its
+**detected** position: there, the painted ink is the only evidence there is.
+Such an edge is never `exact`, because it comes from the detector rather than a
+reader pen. `box.refineInfo.blocked` reports which sides were bounded this way.
+
 ### Which text layer
 
 When OCR has read the row, its words are used **in preference to** the embedded
