@@ -17,7 +17,9 @@
 //                 contradictions do the guarding — on the reference bar the
 //                 right name fits 9 shadow pixels and every other name is
 //                 contradicted on the same 9)
-//   contradicted  a judged pixel differs, or page ink no glyph explains
+//   contradicted  a judged pixel differs, page ink no glyph explains, or
+//                 the name overruns its right neighbour (reason 'width':
+//                 its end plus the gap passes the right pen by over fitTol)
 //   no-evidence   the bar left nothing to compare (or the set lacks a glyph)
 //
 // Two consistent names are a tie, and the tie is the answer (METHOD rule 6).
@@ -35,7 +37,11 @@
 //                      over a LIST a byte of slack is harmless: on the
 //                      reference bar the right name hits 9 of 9 shadow
 //                      pixels of a 74 edge and the wrong ones 1 or 2 of 9
+//   edge ≤ 4·(tol+slack)  body: too dark to hold two levels apart
 //   body               nothing — the ink is destroyed
+// A matched pixel counts as evidence only where the page shows a shadow
+// (its byte is further from the bar's than the acceptance width); a glyph's
+// faint pixel over the bar's own byte is not a measurement.
 // A white prediction under a light edge predicts the edge byte itself; page
 // ink there that the candidate does not draw is hidden ink the candidate
 // lacks — unexplained, hence contradicted.
@@ -84,7 +90,10 @@
   //   page  {w, h, gray}          the whitened page the reader certified against
   //   det   detectObjects(page)   mask (+ _edge) and objects
   //   set   the line's glyph set  (the face that drew the neighbouring word)
-  //   line  {baseline, phy, tol, spaceLine, penLeft, penRight, pen0?, top?, bot?, metrics?}
+  //   line  {baseline, phy, tol, spaceLine, penLeft, penRight, gapLeft?, gapRight?, pen0?, top?, bot?, metrics?}
+//           gapLeft/gapRight = the gap the text leaves to each neighbour:
+//                      the line's space unless given — 0 before a comma or
+//                      after a bracket, where the neighbour touches the name
   //           metrics  = render.js pageMetrics over the document's read lines:
   //                      the producer's advances and kern pairs, measured
   //                      from its pens — a 2008 Times draws these outlines
@@ -111,7 +120,8 @@
   //          the neighbour words, and the neighbouring LINES' glyphs where
   //          their rows overlap this window: at a tight pitch the line
   //          above's descenders share rows with this line's ascenders],
-  //          minInk (default 12)}
+  //          minInk (default 6), fitTol (default 1.25: how far the name's end
+//          may miss the right neighbour's pen less one space)}
   // → { verdict, reason?, missing?, pens, advanceW, penFit, open, edge,
   //     dark, unexplained, edgeOnly, window: {x0, y0, w, h}, mism, render }
   function testHypothesis(page, det, set, line, box, text, opts) {
@@ -120,6 +130,9 @@
     const explained = opts?.explained || [];
     const tol = line.tol || 0, phy = line.phy || 0;
     const spaceLine = line.spaceLine ?? null;
+    // the gaps to the neighbours: a space by default, none before a comma
+    // (the caller knows the neighbour's character; "Kellen," has no space)
+    const gapLeft = line.gapLeft ?? spaceLine, gapRight = line.gapRight ?? spaceLine;
     const none = (reason, extra) => ({ verdict: 'no-evidence', reason, ...extra,
       open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0, match: 0, differ: 0 },
       unexplained: 0, edgeOnly: false });
@@ -131,8 +144,8 @@
     if (line.pen0 != null) pens = [line.pen0];
     else {
       const est = [];
-      if (line.penLeft != null && spaceLine != null) est.push(line.penLeft + spaceLine);
-      if (line.penRight != null && spaceLine != null) est.push(line.penRight - spaceLine - lay0.advanceW);
+      if (line.penLeft != null && gapLeft != null) est.push(line.penLeft + gapLeft);
+      if (line.penRight != null && gapRight != null) est.push(line.penRight - gapRight - lay0.advanceW);
       if (!est.length) return none('no-pen');
       const dist = p => Math.min(...est.map(e => Math.abs(p - e)));
       const seen = new Set();
@@ -150,12 +163,26 @@
     const rank = v => v.reason === 'missing' ? 3 : { consistent: 0, 'no-evidence': 1, contradicted: 2 }[v.verdict];
     let best = null;
     for (const p of pens) {
-      const v = testAtPen(page, det, set, line, text, p, lay0, { quant, minInk, explained, tol, phy, spaceLine, trace: opts?.trace });
+      const v = testAtPen(page, det, set, line, text, p, lay0, { quant, minInk, explained, tol, phy, spaceLine, gapRight, trace: opts?.trace });
       const key = [rank(v), v.open.differ + v.edge.differ + v.dark.differ + v.unexplained];
       if (!best || key[0] < best.key[0] || (key[0] === best.key[0] && key[1] < best.key[1])) best = { v, key };
       if (v.verdict === 'consistent') break;                 // the nearest pen that fits wins
     }
-    return best.v;
+    // 2. the width: the name must not OVERRUN its right neighbour — its end
+    //    plus the gap may miss the neighbour's pen by the same 1¼ px its
+    //    first glyph was searched in, no more. A name 2.8 px too wide sits on
+    //    the left estimate, shares its first column with the true one and
+    //    hides its overrun under the body (ten S-names of loose width on the
+    //    reference bar); the neighbours' pens are page pixels too, and a
+    //    space the line does not have is a contradiction. A name that ends
+    //    EARLY is not contradicted here: a wider gap is a double space or a
+    //    justified line (v3's "Seats:" sits 1.6 px before its value) — the
+    //    bar's own width is the matcher's measurement, reported as penFit
+    const fitTol = opts?.fitTol ?? 1.25;
+    const out = best.v;
+    if (out.verdict !== 'contradicted' && out.reason !== 'missing' && out.penFit != null && out.penFit > fitTol)
+      return { ...out, verdict: 'contradicted', reason: 'width' };
+    return out;
   }
 
   // one candidate at one pen
@@ -194,8 +221,9 @@
       open: { ink: 0, match: 0, differ: 0 }, edge: { ink: 0, match: 0, differ: 0 }, dark: { ink: 0 },
       unexplained: 0, edgeOnly: false, pen0 });
     const advanceW = lay.advanceW;
-    const penFit = line.penRight != null && spaceLine != null
-      ? pen0 + advanceW + spaceLine - line.penRight : null;
+    const gapRight = o.gapRight ?? spaceLine;
+    const penFit = line.penRight != null && gapRight != null
+      ? pen0 + advanceW + gapRight - line.penRight : null;
 
     // 2. render the candidate at the line's baseline and y-phase
     const r = R.renderLine(set, lay.glyphs.map(g => ({ ch: g.ch, pen: g.pen })), line.baseline, { phy });
@@ -307,9 +335,22 @@
         }
         if (m) {                                              // an edge: the composite is judged —
           const dk = ev < 160, slack = dk ? 1 : 0;            // a dark one with the compositor's byte of slack
+          // an edge byte is the shadow's whole dynamic range ((255·k)>>8 is
+          // white under it, 0 is black): one that cannot hold two levels
+          // further apart than the acceptance width is body — a 1..3 column
+          // beside a Calibri stem matched every name on the page, and a 7
+          // contradicted the true one on a byte of JPEG ringing
+          if (ev <= 4 * (t + slack)) continue;
           const ok = edgePreds(g, ev, lin).some(p => Math.abs((quant ? quant[p] : p) - pv) <= t + slack);
           const c = dk ? dark : edge;
-          if (g < 255) { c.ink++; if (ok) c.match++; else { c.differ++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark' : 'edge' }); } }
+          // a match is evidence only where the page SHOWS a shadow: the
+          // bar's own byte under a glyph's faint pixel says nothing (the
+          // user's rule — strip the column's lightest pixels, judge the rest)
+          const shadow = Math.abs(pv - ev) > t + slack;
+          if (g < 255) {
+            if (!ok) { c.ink++; c.differ++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark' : 'edge' }); }
+            else if (shadow) { c.ink++; c.match++; }
+          }
           else if (!ok && y >= jTop && y < jBot && !inkedBy(x, y)) { unexplained++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark-unexplained' : 'edge-unexplained' }); }
           continue;
         }

@@ -396,11 +396,11 @@ they were found (each one first showed up as the *truth* being contradicted on
   ascenders.
 
 What the bench says now (tol0 `npm run bench:hypothesis`, 15 settings each,
-dark edges judged): Courier page 22 words — truth consistent 244, contradicted
-**0**, no-evidence 86; decoys 1,927 of 2,055 contradicted, 20 ties (`-0800` /
+dark edges judged): Courier page 22 words — truth consistent 235, contradicted
+**0**, no-evidence 95; decoys 1,927 of 2,055 contradicted, 20 ties (`-0800` /
 `-0000`, `01:13:54` / `01:12:12`, `Re:` / `To:` two columns in — the
 difference is under the body, which is the premise measured). Times page 42
-words — truth consistent 471, contradicted **0**, no-evidence 159; decoys 890
+words — truth consistent 469, contradicted **0**, no-evidence 161; decoys 890
 of 915 contradicted, 13 ties (`Departs:` / `Locator:` under a dark edge,
 `9:10` / `9:47`). Before the dark edges judged the truth was consistent 113
 and 168 times, and `Record` was contradicted once on the line whose only
@@ -423,6 +423,37 @@ unexplained 0) and contradicts the other four; the item-3 bar keeps it too
   single-glyph floor) both bars of the reference document now resolve to
   SARAH KELLEN, and `verify-redactions.mjs` asserts both.
 
+**What two memos with known text taught (2026-09-05, later).** The user
+supplied `EFTA00038617` and `EFTA01649149` (Calibri 1.02, read at tol 2)
+with their un-redacted sources; `tools/hypothesis-truth.mjs` (tol0) runs the
+tester on every real bar against its truth and Recto's name list, and
+`verify-redactions.mjs` asserts both memos. Five rules came out of it, all in
+`engine/hypothesis.js` and LAWS §8:
+
+- an edge too dark to hold two levels apart (edge ≤ 4·(tol + slack)) is
+  body — a 1..3 column beside a stem matched all 64 names on the Barnett bar;
+- a match is evidence only where the page shows a shadow: Sarah Kellen's
+  "8 of 8" edge pixels were one real one;
+- the gap to a neighbour is a space unless the neighbour touches (the seam
+  passes `gapLeft`/`gapRight`: 0 before a comma) — every memo bar sits before
+  a comma, and the assumed space put the truth 3 px off;
+- a name that overruns its right neighbour by over 1¼ px is contradicted
+  (reason `width`); one that ends early is not, and its `penFit` is reported
+  for the matcher — on the reference bar the matcher's near-miss S-names now
+  tie by pixels, and only the fit separates them;
+- a tolerance page keeps the set's metrics (the measured pens gave "Lesley
+  Groff" 76.08 px on one memo page and 77.91 on the other; the set 77.24, the
+  bars 77).
+
+The finding itself: these bars are the names' advance boxes, the bearings
+sit inside the body, and the edge columns carry the bar's own byte. No name
+gets evidence; the truth is never contradicted (18 bars); where the list
+holds it, it is the one name the page did not contradict (Sarah Kellen on
+the first memo, 9 of 9 others contradicted) — the verifier now counts such
+a bar as a *survivor*. Five truths are missing from the matcher's lists
+(Adriana Mucinska, Lex Wexner, Lesley Groff, Richard Barnett, the source's
+own "Gergory Bledsoe"): the list, not the pixels.
+
 Across Recto's first 22 test documents (`node tools/verify-redactions.mjs`,
 2026-09-05, dark edges judged, 5 pages read per document): 361 bars, 183 with
 a candidate list — 4 unique, 1 tied, 88 no-evidence, 76 with every name
@@ -435,6 +466,9 @@ tie. The user tested and approved the result; the next improvements are on
 Recto's side, first the redaction boxes drawn twice (the report scores the
 same bar twice on that page).
 
-Not built, by decision: document-level width comparison. Not built yet: the
-bar-padding prior. Shadow reads stay opt-in in the reader; the tester judges
+Not built, by decision: document-level width comparison (the tester now
+contradicts an overrun; a name that ends early is the matcher's call, on
+`penFit`). Not built yet: the bar-padding prior; the bottom edge row as
+evidence for descenders (a bar padded a row below the baseline shadows a
+`g` — the rows are excluded today for the neighbouring lines' sake). Shadow reads stay opt-in in the reader; the tester judges
 dark edges on its own terms (a list, a byte of slack).

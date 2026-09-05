@@ -31,12 +31,12 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=a663fe73'},
         {'path': 'ocr_tool/engine/render.js', 'version': 'v=d7ecfa23'},
         {'path': 'ocr_tool/engine/set-fonts.js', 'version': 'v=29e7faf6'},
-        {'path': 'ocr_tool/engine/hypothesis.js', 'version': 'v=1ef0ebb4'},
+        {'path': 'ocr_tool/engine/hypothesis.js', 'version': 'v=b8d7e99b'},
         # the adapters (Recto-owned). ocr-result.js is shared with the reader's
         # Worker (ocr-worker.js, fetched by url from ocr-tool.js — not a page script)
         {'path': 'ocr_tool/ocr-result.js', 'version': 'v=2'},
         {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=9'},
         {'path': 'ocr_tool/pixel-view.js', 'version': 'v=5'},
         # the hypothesis seam: window.ocrTestHypothesis for redaction_matching
-        {'path': 'ocr_tool/hypothesis-view.js', 'version': 'v=2'},
+        {'path': 'ocr_tool/hypothesis-view.js', 'version': 'v=6'},
     ]

@@ -113,6 +113,13 @@ async function ocrTestHypothesis(box, name) {
   const penLeft = leftChars.length ? leftChars[leftChars.length - 1].x1 / sx : null;
   const penRight = rightChars.length ? rightChars[0].x0 / sx : null;
   if (penLeft == null && penRight == null) return hvReason(box, 'no pen on either side');
+  // the gap the name leaves to each neighbour: a space, or none where the
+  // neighbour is punctuation that touches it ("Kellen," — the memo's lists)
+  const closes = ch => /[,.;:!?'"’”)\]}]/.test(ch), opens = ch => /[('"‘“\[{]/.test(ch);
+  const leftCh = leftChars.length ? leftChars[leftChars.length - 1].cp.c : '';
+  const rightCh = rightChars.length ? rightChars[0].cp.c : '';
+  const gapLeft = leftCh && opens(leftCh) ? 0 : spaceLine / sx;
+  const gapRight = rightCh && closes(rightCh) ? 0 : spaceLine / sx;
 
   // the bar: the detected box object over it
   const bx0 = box.x / sx, bx1 = (box.x + box.w) / sx, by0 = box.y / sx, by1 = (box.y + box.h) / sx;
@@ -140,7 +147,7 @@ async function ocrTestHypothesis(box, name) {
         Math.abs(b.ocr.baseline - span.ocr.baseline) < reach && b.ocr.baseline !== span.ocr.baseline) draw(b);
 
   const line = { baseline: span.ocr.baseline, phy: span.ocr.phy || 0, tol: span.ocr.tol || 0,
-    spaceLine: spaceLine / sx, penLeft, penRight, top: span.ocr.top, bot: span.ocr.bot,
+    spaceLine: spaceLine / sx, penLeft, penRight, gapLeft, gapRight, top: span.ocr.top, bot: span.ocr.bot,
     metrics: hvKernTable(box.page, span.ocr.spaceAdv || spaceLine / sx) };
   const text = box.uppercase ? name.toUpperCase() : name;
   const v = OCRHypothesis.testHypothesis(info.page, info.det, set, line, boxObj, text,
@@ -149,7 +156,7 @@ async function ocrTestHypothesis(box, name) {
   // plain data for box.verdicts (the render and the mismatch map stay here)
   const { render, mism, window: win, ...plain } = v;
   hypothesisView.last = { box: box.id, name, verdict: plain, window: win, mism };
-  return { ...plain, set: set.name, text };
+  return { ...plain, set: set.name, text, adj: `${leftCh}|${rightCh}`, gaps: [gapLeft, gapRight] };
 }
 window.ocrTestHypothesis = ocrTestHypothesis;
 window.OCRHypothesisView = hypothesisView;

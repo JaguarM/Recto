@@ -230,7 +230,14 @@ after every width recompute and shows the verdict on each chip:
 A dark edge column judges too: strip the column's own byte and the darker
 pixels are the hidden name's first (or last) column, compared with one byte
 of slack for the box compositor's rounding — on the reference page that is
-what names the item-3 bar SARAH KELLEN from nine pixels of a 74 edge.
+what names the item-3 bar SARAH KELLEN from nine pixels of a 74 edge. An
+edge too dark to hold two levels apart is body, and a matched pixel counts
+only where the page shows a shadow. The seam also tells the tester the gap
+to each neighbour (none before a comma) and a name that overruns its right
+neighbour by over 1¼ px is contradicted with the reason `width`; a name that
+ends early is not, and its fit (`penFit`) is on the verdict for the matcher.
+A bar whose list holds exactly one name the page did not contradict, on no
+evidence of its own, is a *survivor* in `tools/verify-redactions.mjs`.
 
 Two consistent names are a tie, and the tie is the answer. Inputs come from
 `neighboursFor(box)` (the neighbour OCR segments and their pens),
