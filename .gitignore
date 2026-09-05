@@ -49,3 +49,7 @@ _temp_test_files/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Optional Modules
+redaction_refiner
+redaction_matching
