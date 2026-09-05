@@ -449,10 +449,21 @@ function _svgFontFamily(box) {
  */
 function renderTextLayer(pageContainer, pageNum) {
   const svg = getOrCreateSVGLayer(pageContainer, pageNum);
-  // Clear existing groups (will be re-built)
-  svg.querySelectorAll('.utb-group').forEach(g => g.remove());
+  // Clear existing groups (will be re-built) — except the group of a box in a
+  // live session. Inline edit hangs a <foreignObject> input off its group and
+  // micro-typo hangs char-hit rects off its own; renderBox rebuilds neither,
+  // so removing the group would silently drop the session's DOM while
+  // utbState.editingId / microTypoId still claim it is open. renderBox is safe
+  // to run over a kept group: it only updates the text / bbox / handles.
+  const keep = new Set([utbState.editingId, utbState.microTypoId].filter(Boolean));
+  svg.querySelectorAll('.utb-group').forEach(g => {
+    if (!keep.has(g.dataset.id)) g.remove();
+  });
 
   utbState.getPageBoxes(pageNum).forEach(box => renderBox(box));
+
+  // Selection lives in utbState, not in the markup we just threw away.
+  if (utbState.selectedId) selectBoxInSVG(utbState.selectedId);
 }
 
 /** Re-render every box on every currently-rendered page. */

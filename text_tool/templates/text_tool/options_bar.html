@@ -81,6 +81,19 @@
     <div class="options-group-header">Spacing</div>
   </div>
 
+  <div class="options-divider"></div>
+
+  <!-- Applies to every selection, so it keeps a fixed slot ahead of the
+       redaction-only Match group. Wired in text_tool/…/text-tool.js. -->
+  <div class="options-group">
+    <div class="options-group-controls">
+      <button id="utb-delete-box" class="icon-button" title="Delete the selected box (Del)">
+        <span class="material-symbols-outlined">delete</span>
+      </button>
+    </div>
+    <div class="options-group-header">Box</div>
+  </div>
+
   <!-- Match group — tuning that drives width matching against a detected bar.
        Revealed only while a redaction box is selected (see syncToolbarToBox in
        toolbar.js). The #tolerance / #force-uppercase IDs are read by whichever

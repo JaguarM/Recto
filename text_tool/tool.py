@@ -13,11 +13,11 @@ class TextTool(PDFTool):
     scripts_after_app = [
         {'path': 'text_tool/fonts.js', 'version': 'v=1'},           # the catalogue: @font-face + font menu
         {'path': 'text_tool/unified-text-box.js', 'version': 'v=6'},
-        {'path': 'text_tool/svg-renderer.js', 'version': 'v=8'},
+        {'path': 'text_tool/svg-renderer.js', 'version': 'v=9'},
         {'path': 'text_tool/drag-resize.js', 'version': 'v=7'},
         {'path': 'text_tool/ruler.js', 'version': 'v=1'},
         {'path': 'text_tool/toolbar.js', 'version': 'v=11'},
         {'path': 'text_tool/micro-typo.js', 'version': 'v=5'},
         {'path': 'text_tool/inline-edit.js', 'version': 'v=7'},
-        {'path': 'text_tool/text-tool.js', 'version': 'v=5'},
+        {'path': 'text_tool/text-tool.js', 'version': 'v=6'},
     ]

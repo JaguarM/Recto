@@ -56,7 +56,11 @@ window.handleManualAddText = function (pageNum, x, y) {
   const defaultSizePt = parseFloat(document.getElementById('fabric-font-size')?.value) || 12;
 
   const newBox = utbState.addBox(new UnifiedTextBox({
-    type: 'embedded',
+    // 'harfbuzz' — text this editor shapes, not a span extracted from the
+    // document. Type matters for visibility: the extracted layers ('embedded',
+    // 'ocr') are shown/hidden wholesale by their layer toggles, and text the
+    // user just typed must never vanish with them.
+    type: 'harfbuzz',
     page: pageNum,
     text: 'Text',
     lineId: nearest ? nearest.lineId : null,
@@ -77,3 +81,47 @@ window.handleManualAddText = function (pageNum, x, y) {
   // Drop into inline edit so the placeholder is selected and ready to overwrite.
   if (typeof enterInlineEdit === 'function') enterInlineEdit(newBox);
 };
+
+
+// ── Tool: delete a box ────────────────────────────────────────
+// One removal path for every box type, used by the toolbar's Delete button and
+// by the Delete / Backspace keys. Any live session on the box is torn down
+// first, so no id in utbState outlives the box it points at.
+
+window.utbDeleteBox = function (id) {
+  const box = id ? utbState.getBox(id) : null;
+  if (!box) return;
+
+  if (utbState.editingId === box.id && typeof cancelInlineEdit === 'function') cancelInlineEdit();
+  if (utbState.microTypoId === box.id && typeof exitMicroTypo === 'function') exitMicroTypo();
+
+  utbState.removeBox(box.id);
+  removeBoxFromSVG(box.id);
+
+  if (utbState.selectedId === box.id) {
+    utbState.selectedId = null;
+    deselectAllInSVG();
+    document.getElementById('fabric-options-bar')?.classList.add('hidden');
+  }
+
+  // Let whichever plugins track boxes redraw what they own.
+  window.refreshRuler?.();
+  if (typeof renderCandidates === 'function') renderCandidates();
+};
+
+document.getElementById('utb-delete-box')?.addEventListener('click', () => {
+  window.utbDeleteBox(utbState.selectedId);
+});
+
+// Delete / Backspace removes the selection — but never while the caret is in a
+// field (the inline-edit input, the font-size box, the tolerance box…), where
+// those keys mean "erase a character".
+document.addEventListener('keydown', e => {
+  if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+  if (utbState.editingId) return;
+  const t = e.target;
+  if (t && (t.isContentEditable || /^(input|textarea|select)$/i.test(t.tagName))) return;
+  if (!utbState.selectedId) return;
+  e.preventDefault();
+  window.utbDeleteBox(utbState.selectedId);
+});

@@ -8,6 +8,7 @@ is added, moved, renamed, or removed.
 Run with: python manage.py test text_tool
 """
 
+from django.conf import settings
 from django.test import TestCase
 
 from text_tool.logic import fonts
@@ -24,6 +25,8 @@ TEXT_TOOL_DOM_IDS = (
     'fabric-color', 'kerning', 'fabric-nudge-mode',
     'fabric-letter-spacing', 'fabric-default-sw',
     'fabric-space-width', 'fabric-space-width-display', 'toggle-space-labels',
+    # Box group (applies to any selection)
+    'utb-delete-box',
     # Match group (redaction-only tuning; ids also read by matching plugins)
     'fabric-match-group', 'tolerance', 'force-uppercase',
 )
@@ -37,6 +40,14 @@ class TextToolUiTests(TestCase):
         for dom_id in TEXT_TOOL_DOM_IDS:
             self.assertIn(f'id="{dom_id}"', html,
                           f'text_tool control #{dom_id} missing from the rendered page')
+
+    def test_added_text_is_not_part_of_an_extractable_layer(self):
+        """Text the user types is a 'harfbuzz' box, never 'embedded'/'ocr':
+        those layers are shown and hidden wholesale by their toggles, and text
+        just typed must not vanish with them."""
+        src = (settings.BASE_DIR / 'text_tool' / 'static' / 'text_tool' / 'text-tool.js').read_text(encoding='utf-8')
+        add_text = src[src.index('window.handleManualAddText'):]
+        self.assertIn("type: 'harfbuzz'", add_text)
 
     def test_catalogue_script_loads_before_the_toolbar(self):
         html = self.client.get('/').content.decode()
