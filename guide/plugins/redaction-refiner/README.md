@@ -119,7 +119,11 @@ notice is `words.LICENSE.txt` next to it.
   `window.refineRedaction(box, { force: true })`, and the pure helpers on
   `window.RedactionRefiner` (`classifyToken`, `completions`, `resolveEdge` …).
   After a run, `box.refineInfo` says what each side was judged to be
-  (`punct` / `word` / `fragment`, the token, the completion and its placement).
+  (`punct` / `word` / `fragment`, the token, the completion and its placement),
+  the `x`/`w` it produced, and `exact` — true when both edges came from the
+  reader's OCR pens, so the width is exact to mupdf's ¼-px lattice. A matcher
+  reads `exact` to match names to a quarter pixel instead of a pixel tolerance
+  (`redaction_matching` does).
 
 ## Tests
 

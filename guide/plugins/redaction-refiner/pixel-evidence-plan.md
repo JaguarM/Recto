@@ -1,8 +1,11 @@
 # Plan — verifying candidate names against the page pixels
 
-*Status: **proposed** 2026-09-05. Engine work lives in tol0 (`engine/`, certified
-there, synced verbatim); Recto only consumes verdicts. Every phase ends with the
-command that proves it, like [../ocr-tool/pixel-view-plan.md](../ocr-tool/pixel-view-plan.md).*
+*Status: **Phase 0 built** 2026-09-05 (Recto: the pen-exact width and the
+matcher's verdict display, wired to an inert seam); **Phases 1–3 open**, to be
+done from a tol0 session — see the hand-over checklist at the end. Engine work
+lives in tol0 (`engine/`, certified there, synced verbatim); Recto only consumes
+verdicts. Every phase ends with the command that proves it, like
+[../ocr-tool/pixel-view-plan.md](../ocr-tool/pixel-view-plan.md).*
 
 ## The premise: verify a list, never read a sliver
 
@@ -50,11 +53,10 @@ So on this document pixels add **nothing beyond what already shipped**: bar 2's
 leaked `S` is the remnant the refiner already turns into a *starts with S*
 filter (unique → SARAH KELLEN), and bar 1 leaks no ink at all — a full-height
 body with dark edges, which §8 rightly refuses as evidence ("dark edges carry
-no evidence", the compositor's rounding is not the glyph's). Bar 1's six
-width-tied names (SARAH KELLEN, JUSTIN NELSON, TONY PODESTA, GÉRALD MARIE,
-NOOR SIDDIQUI, NICKI HASKELL) would all come back **no evidence**, and the tie
-stands until something outside the pixels breaks it (a typed filter, or the
-document-level consistency under *Later*).
+no evidence", the compositor's rounding is not the glyph's). Bar 1's five
+names tied to the font unit (SARAH KELLEN, JUSTIN NELSON, TONY PODESTA, GÉRALD
+MARIE, NOOR SIDDIQUI) would all come back **no evidence**, and the tie stands
+until something outside the pixels breaks it — in practice the typed filter.
 
 That is the honest scope: this stage breaks ties **where the redactor leaked
 ink** — a partial first/last glyph beside the bar, glyph tops or descenders
@@ -109,12 +111,12 @@ things already shrink the list, one is new:
   which is what a justified line stretches — falling back to the page's
   `spaceAdv` when the line has fewer than two other gaps, and to *rank only*
   (METHOD rule 8) when a justified line has none. On bar 1 that is `128.5 =
-  name + 2 × 4.0` → 120.5 ± 0.25 px → **6 names instead of 62**. `advanceW`
-  comes from `layoutLine` with the line's set, so it is the same arithmetic
-  the renderer will use.
+  name + 2 × 4.0` → 120.5 ± 0.25 px → **5 names instead of 62** (the sixth,
+  NICKI HASKELL, is 0.8 px off). `advanceW` comes from `layoutLine` with the
+  line's set, so it is the same arithmetic the renderer will use.
 - **Remnants** (`redaction:refined` → starts-with / ends-with) — shipped.
 - **The typed filter** — shipped.
-- **Document-level consistency** — *Later*.
+- **Not** document-level width comparison — excluded by decision, see *Later*.
 
 ### 1. `engine/hypothesis.js` (tol0, DOM-free, synced verbatim)
 
@@ -221,14 +223,35 @@ tied, or without evidence.
 
 ## Phases and how each one is proven
 
-### Phase 0 — exact pens (Recto only, no engine work)
+### Phase 0 — exact pens (Recto only, no engine work) — **built**
 
-Files: `redaction_matching/…/api.js` (`getBoxMatches`), a Node test beside the
-refiner's (`tests_js/`) using the fixture's OCR pens.
+What shipped (matcher v=15, refiner v=2):
+
+- The refiner publishes `box.refineInfo.exact` (both edges derived from OCR
+  pens) with the `x`/`w` it produced; a bar moved since is not exact.
+- `getBoxMatchInfo(box)` uses `±0.3 px` (two ⅛-px lattice snaps) for a
+  pen-exact bar instead of the Tolerance field (a tighter field still wins),
+  and falls back to the field — **flagged `loose`** in the row — when nothing
+  fits the exact width, so near misses stay visible as near misses. The
+  matches row shows the tolerance in force (`±0.30 px · pens`).
+- Verdict consumption: `scoreMatches(box)` calls
+  `window.ocrTestHypothesis(box, name)` when it exists, stores
+  `box.verdicts[name]`, and the chips show `✓ ✗ –`, sort consistent first
+  and count `n of m consistent`. Without a provider it is inert.
+- The plan's §0 equation is realised through the refiner's geometry rather
+  than re-derived: with OCR pens on both sides, `box.w = penRight − penLeftEnd
+  − 2·space_line`, so "candidate advance = box.w ± ¼ px" *is* the equation.
+  `space_line` is the refiner's row space (the row's measured pens when the
+  line is justified, the natural advance otherwise).
+
+Proof on the reference page (`debug_out/smoke.py`, 2026-09-05): bar 1 lists
+**5 names** (the font-unit tie) at `±0.30 px · pens` instead of 62 at ±3 px;
+bar 2 the same 5, narrowed to SARAH KELLEN by its remnant `S`.
 
 ```bash
 cd C:/Users/yanni/Desktop/Recto
-python manage.py test redaction_matching redaction_refiner   # expect: item 3 lists 6 names, not 62
+python manage.py test redaction_matching redaction_refiner   # Node suites included
+python debug_out/smoke.py                                     # bar 1: 5 names · ±0.30 px · pens
 ```
 
 ### Phase 1 — `hypothesis.js` + certification (tol0)
@@ -262,6 +285,35 @@ Then: this plan gets a *What changed while building it* section, the refiner
 and ocr-tool READMEs get the seam and the chip verdicts, tol0's LAWS gets a
 §8 paragraph on string hypotheses if the bench teaches anything new.
 
+## Hand-over checklist for the tol0 session
+
+Everything Recto-side that can exist without the engine exists. What the tol0
+session builds, in order, and the contract it plugs into:
+
+1. **`engine/hypothesis.js`** — `testHypothesis(page, det, set, line, box,
+   text, opts)` as specified in *Design §1*, DOM-free, beside `render.js`.
+2. **`test/hypothesis.test.js` + `tools/hypothesis-bench.mjs`** — *Design §2*;
+   the gate is *truth contradicted = 0*; the `A…`/`Æ…` tie is asserted.
+3. **`tools/sync-recto.mjs`** — add `hypothesis.js` to `ENGINE_FILES`, sync.
+4. **The seam in Recto's `ocr_tool`** (adapter file registered after
+   `pixel-view.js` in `ocr_tool/tool.py`): define
+   `window.ocrTestHypothesis(box, name) → Promise<verdict | null>` where
+   `verdict = { verdict: 'consistent' | 'contradicted' | 'no-evidence', open:
+   {ink, match, differ}, edge: {ink, match, differ}, unexplained, pens,
+   advanceW, penFit, mism? }`. Inputs already on the box: `box.refineInfo`
+   (`left.span` / `right.span` are the neighbour OCR segments with `ocr.font`,
+   `ocr.baseline`, `ocr.phy`, `ocr.tol`, `ocr.spaceAdv` and `baseCharPositions`
+   = the reader's pens; `left.inkEdge` / `right.inkEdge` / `space` give
+   `pen0` and `penRight`), `box.uppercase` (draw the name uppercased when
+   set), `box.page`. Page bytes, `det`, `quant` and the sets come from
+   `pixel-view.js` (`pvPageInfo`, `pvSetsForBox`, `pvEnsureSets`). Return
+   `null` — with a status-line reason — when the row has no OCR segments, no
+   set is shipped for the face, or no detected box object overlaps the bar.
+   The matcher already calls it after every width recompute and renders the
+   result; nothing in `redaction_matching` needs to change.
+5. **`tools/verify-redactions.mjs`** — *Design §4*; assert the reference page
+   (bar 2 unique, bar 1 six-way `no-evidence`).
+
 ## Limits, stated up front
 
 - **No leak, no verdict.** A full-height body with dark edges (bar 1) yields
@@ -280,14 +332,10 @@ and ocr-tool READMEs get the seam and the chip verdicts, tol0's LAWS gets a
 
 ## Later
 
-- **Document-level consistency.** The same person is redacted many times in
-  one document, in different contexts: a full name here, a first name alone
-  there, `Ms. ███` elsewhere. Intersecting the candidate lists of bars that
-  share a person (same width *and* same surrounding context, or a first-name
-  bar whose width matches a full-name bar's first word) narrows every one of
-  them without a pixel. Bar 1 and bar 2 here share width and context; a rule
-  "same width, same line context, same document → same list" would carry
-  bar 2's `S` to bar 1. Powerful, and a *prior*, so it must be shown as such.
+- **Document-level width comparison — excluded** (decision 2026-09-05). Carrying
+  one bar's evidence to another bar of the same width in the same document is a
+  prior, not a measurement: two equal-width bars are two people as easily as
+  one. It is not to be built; every bar is judged on its own line.
 - **Bar-padding prior.** Redactors pad consistently (here: the name plus its
   trailing space, edges 52–56). Learned per document from bars with a unique
   answer, it tightens the width equation for the rest.
