@@ -65,8 +65,9 @@ anything to work on.
 ## Redaction refiner
 
 Redraws detected redaction bars to the true hidden-name extent by reading the
-words that surround each bar: punctuation on a neighbour abuts with no space, so
-that edge is redrawn flush; a whole word (in the shipped English word list, the
+words that surround each bar: punctuation is flush only when the mark binds
+toward the bar (a comma binds left, so `EPSTEIN, ███` keeps its space while
+`███, and` is flush); a whole word (in the shipped English word list, the
 candidate-name pool, or capitalised) has a real space before it, so the edge is
 redrawn one space-width in; a word *fragment* (`nd` left over when the redaction
 dropped the `a` of `and`) has its missing letters next to the bar, so the edge is

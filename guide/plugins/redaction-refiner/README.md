@@ -36,9 +36,29 @@ edge; the verdict is recorded on `box.refineInfo` (`source: 'embedded' | 'ocr'`)
 Look at the word facing the bar on each side (its tail on the left, its head on
 the right):
 
-- **Punctuation** (any Unicode `\p{P}`: `. , ; : ! ? ' " ) ( - – — /` …) abuts a
-  word with no space, so the box edge is redrawn **flush** to where that
-  neighbour ends/begins.
+- **Punctuation** is flush only when the mark **binds toward the bar**. The same
+  comma reads differently from each side: `EPSTEIN, ███` has a real space the
+  bar must not eat, while `███, and` is flush, because a comma binds to the word
+  on its left.
+  - **Closing** `. , ; : ! ? ) ] } » ” … % >` bind left — flush against a bar on
+    their left, one space in from a bar on their right.
+  - **Opening** `( [ { « “ ¿ ¡ <` bind right — the mirror. `<` and `>` are
+    Unicode *math* symbols rather than `\p{P}`, but an email address in angle
+    brackets (`Klein <███>`) delimits exactly like a paren, so they join the
+    bracket classes instead of falling through to the word rule and losing a
+    space-width at each edge.
+  - **Dashes and slashes** `- – — / \ @ & _ ~` bind both ways when glued to a
+    word (`co-` and `-conspirators` are one compound, so flush) and neither way
+    when standing alone (a spaced dash keeps its space).
+  - **Quotes** `" ' ‘ ’` bind to whichever side carries a word. A quote glued to
+    a word has already closed it, so the hidden word is separate and a space
+    sits between them (`the "example" ███`). A quote standing alone opens onto
+    the hidden word, so it is flush (`said "███`). Stacked marks are looked
+    through: the `(` behind the quote in `("███` is not a word, so the quote
+    still opens.
+
+  A spaced mark is sized like any other inter-word space on the row. The verdict
+  is on `box.refineInfo`, as `kind: 'punct'` with `reason: 'abuts' | 'spaced'`.
 - **A whole word** means a real inter-word space sits in the gap, so the edge is
   redrawn **one space-width in** from where the neighbour begins. A token is a
   whole word when it is in the shipped English list (`words.txt`, possessives and
@@ -117,7 +137,8 @@ notice is `words.LICENSE.txt` next to it.
   no surrounding words it simply does nothing.
 - **Manual re-run / inspection** — `window.refineAllRedactions()`,
   `window.refineRedaction(box, { force: true })`, and the pure helpers on
-  `window.RedactionRefiner` (`classifyToken`, `completions`, `resolveEdge` …).
+  `window.RedactionRefiner` (`classifyToken`, `completions`, `resolveEdge`,
+  `punctBindsToward`, `facingRun` …).
   After a run, `box.refineInfo` says what each side was judged to be
   (`punct` / `word` / `fragment`, the token, the completion and its placement),
   the `x`/`w` it produced, and `exact` — true when both edges came from the
