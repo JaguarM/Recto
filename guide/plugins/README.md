@@ -60,23 +60,32 @@ anything to work on.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar | *(none — fully client-side)* |
+| `redaction_matching` | *(none yet)* | Candidate-name → redaction-bar width matching; owns the candidates sidebar (name format, starts-with / ends-with filter, matches table) | *(none — fully client-side)* |
 
 ## Redaction refiner
 
-Redraws detected redaction bars to the true hidden-word extent by reading the
+Redraws detected redaction bars to the true hidden-name extent by reading the
 words that surround each bar: punctuation on a neighbour abuts with no space, so
-that edge is redrawn flush; otherwise the edge is redrawn one space-width in from
-where the neighbour word begins (the space sized from that word's own font). No
-UI — it runs on the generic `redactions:connected` PDFHooks event that
-`embedded_text_viewer` emits after snapping redactions to lines.
+that edge is redrawn flush; a whole word (in the shipped English word list, the
+candidate-name pool, or capitalised) has a real space before it, so the edge is
+redrawn one space-width in; a word *fragment* (`nd` left over when the redaction
+dropped the `a` of `and`) has its missing letters next to the bar, so the edge is
+redrawn one space plus those letters in. Spaces and letters are sized from the
+neighbour word's own font. It works from the embedded layer at once and re-derives
+from the OCR words when that (slower) pass lands. No UI — it runs on the generic
+`redactions:connected` PDFHooks event that `embedded_text_viewer` emits after
+snapping redactions to lines.
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_refiner` | [redaction-refiner/](redaction-refiner/) | Redraws redaction bars to the hidden-word extent via surrounding words + punctuation | *(none — fully client-side)* |
+| `redaction_refiner` | [redaction-refiner/](redaction-refiner/) | Redraws redaction bars to the hidden-name extent via surrounding words, punctuation and a word list | *(none — fully client-side)* |
 
 - **Attaches through the `redactions:connected` hook and guarded globals** (`renderBox`,
-  `calculateAllWidths`, `getNaturalSpaceWidth`, `GEO`) — never imports.
+  `calculateAllWidths`, `getNaturalSpaceWidth`, `GEO`, `state.namesData`) — never imports.
+- **Emits `redaction:refined`** (generic, names no consumer) with the remnant slivers it
+  found sticking out of a bar — the hidden name's own first/last letters.
+  `redaction_matching` listens and fills that box's starts-with / ends-with filter from
+  them; without a refiner the event never fires and the filter stays manual.
 - **Needs `redaction` boxes and surrounding text** (an `embedded_text_viewer` or
   `ocr_tool` line). With neither it no-ops. The hook emission is generic and names no
   plugin, so it stays put — emitting into the void — if the refiner is removed.
@@ -88,6 +97,7 @@ redaction_matching ──runtime globals──> text_tool ──> pdf_core
 ocr_tool           ──runtime globals──> text_tool ──> pdf_core
 base64_tool        ──runtime globals──> text_tool ──> pdf_core
 redaction_refiner  ──'redactions:connected'──> embedded_text_viewer ──> pdf_core
+redaction_refiner  ──'redaction:refined'  ──> (redaction_matching listens, optionally)
 ```
 
 - **`redaction_matching` attaches to `text_tool` through guarded globals**, not imports. See

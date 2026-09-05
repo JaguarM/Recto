@@ -1,65 +1,136 @@
 # Redaction Refiner — `redaction_refiner`
 
-Redraws detected redaction bars to the true extent of the hidden word, using the
-text that surrounds each bar on its line. Client-side only, no UI: it runs
+Redraws detected redaction bars to the true extent of the hidden name, using the
+words that surround each bar on its line. Client-side only, no UI: it runs
 automatically whenever redactions are (re)connected to their text lines.
 
 ## What it does
 
-For every `redaction` box it finds the embedded/OCR word immediately **left** and
-**right** of the box on the same text line, then rebuilds each edge.
+For every `redaction` box it builds the **words on its row** from the
+embedded/OCR spans sharing the line and takes the nearest word **left** and
+**right** of the bar. Words are built from per-character positions when the span
+carries them, so a text-layer span that still runs *under* the bar (a rectangle
+drawn over live text) contributes only its visible words — anything lying mostly
+under the bar is the redacted text itself and is never a neighbour. Nor is a
+**remnant sliver**: a lone capital letter touching the bar (OCR reading the
+exposed `S` of `SARAH` that the bar failed to cover) belongs to the hidden name,
+so the bar grows over it and the next word out is the neighbour. Remnants are
+announced on the `redaction:refined` event (below) — they are the hidden name's
+own first/last letters, which a matcher can use as a filter.
+
+### Which text layer
 
 When OCR has read the row, its words are used **in preference to** the embedded
 ones: OCR reads the glyphs actually *visible* on the page after redaction,
-whereas the embedded text layer can still carry glyphs the redaction removed from
-view. A following word like `and` whose leading `a` was dropped from the text
-layer survives there as `nd` at the `n`'s position — about one glyph to the right
-of where the word visibly begins — and measuring the box edge against that
-clipped neighbour would push the edge past the real word start and widen the bar
-(by the width of the hidden `a`). OCR's `and` sits at the true visible start, so
-it gives the correct extent. With no OCR on the row it falls back to the embedded
-spans on the box's line (the same lookup `embedded_text_viewer` snaps to). Then:
+whereas the embedded text layer can carry glyphs the redaction removed from
+view — or drop the glyph touching the bar. The auto OCR of a long document can
+take minutes, so until it lands the refiner works from the **embedded** spans on
+the box's line (the same lookup `embedded_text_viewer` snaps to), and the
+fragment rule below recovers what that layer dropped. When the OCR pass finishes,
+`redactions:connected` fires again and every bar is re-derived from the OCR
+words. Because both derivations describe the same page they land on the same
+edge; the verdict is recorded on `box.refineInfo` (`source: 'embedded' | 'ocr'`).
 
-- Look at the character on the neighbour word that **faces the box** — its last
-  character on the left, its first character on the right.
+### The three rules
+
+Look at the word facing the bar on each side (its tail on the left, its head on
+the right):
+
 - **Punctuation** (any Unicode `\p{P}`: `. , ; : ! ? ' " ) ( - – — /` …) abuts a
   word with no space, so the box edge is redrawn **flush** to where that
-  neighbour word ends/begins.
-- **Anything else** means a real inter-word space sits in the gap, so the edge is
-  redrawn **one space-width in** from where the neighbour word begins, back
-  toward the redaction. The space is sized from the **neighbour word's own font
-  and size** via the shared HarfBuzz `/widths` path (`getNaturalSpaceWidth`),
-  falling back to a `0.25em` estimate if that global is absent.
+  neighbour ends/begins.
+- **A whole word** means a real inter-word space sits in the gap, so the edge is
+  redrawn **one space-width in** from where the neighbour begins. A token is a
+  whole word when it is in the shipped English list (`words.txt`, possessives and
+  hyphen compounds included), **or** a name from the candidate pool
+  (`state.namesData` / custom names, read through a guarded global), **or**
+  capitalised (`Wexner` — a proper noun the list cannot know).
+- **A word fragment** — not a word, but a dictionary word *completes* it. This is
+  the `including ███ nd GHISLAINE MAXWELL` case: the redaction tool dropped the
+  `a` of `and` from the text layer, leaving `nd`. Most-frequent completion first
+  (`and` before `end`, `find`, `second` …), the missing letters are measured in
+  the neighbour's own font, and the geometry must agree with where they would
+  sit — right between the fragment and the name:
+  - **under the bar** — the gap between bar and fragment is ~0 (the detector
+    swallowed the letters) and the bar is wide enough to hold them plus a
+    space, or
+  - **visible but unread** — the gap is ~the missing letters' width (the
+    letters are on the page; only the text layer lost them).
+
+  If a completion fits, the edge is redrawn one space **plus the missing
+  letters** in from the fragment. If none fits (`FORD` a full space away from
+  the bar is a word, not `afFORD`), the token is treated as a whole word. If the
+  fragment reading would collapse the bar, it falls back to the word reading.
+
+Spaces are sized from the **neighbour word's own font and size** via the shared
+HarfBuzz `/widths` path (`getNaturalSpaceWidth`, else a `0.25em` estimate), and
+stretched to the row's measured spacing when the line is justified (measured
+spaces clearly *above* natural are trusted; a short one under the bar is
+ignored). The missing letters of a fragment go through the same `/widths`
+endpoint; without it the fragment rule is skipped.
 
 Because both edges are rebuilt from the neighbours rather than nudged from the
 painted ink, the result can be **narrower or wider** than the original bar — the
-bar is redrawn. This mirrors the reference `SurroundingWordWidth` pipeline
-(expected edge = neighbour near-edge ∓ one space). After redrawing, candidate
-widths are recomputed once (`calculateAllWidths`, when present) so any matching
-suite re-scores the new bar width.
+bar is redrawn and `calculateAllWidths` (when present) re-scores it.
 
-Boxes with no neighbouring words on their line, and the box the user is currently
-selecting/editing, are left untouched. The refinement is idempotent — it derives
-edges from the (stable) neighbour words, so re-running (e.g. after an OCR pass)
-converges rather than drifting.
+### What it leaves alone
+
+- Bars with no neighbouring words on their line.
+- The box the user is currently selecting/editing.
+- A bar whose neighbours have not changed since it was last refined (the
+  re-run after every page hydration is a cheap signature compare).
+- A bar the user **moved or resized** after refinement — unless better evidence
+  arrives (the OCR layer replacing the embedded one), in which case it is
+  re-derived.
+
+## The word list
+
+`static/redaction_refiner/words.txt` — one lowercase word per line, **most
+frequent first**. It is the intersection of the
+[google-10000-english](https://github.com/first20hours/google-10000-english) 20k
+n-gram list (the *order*) with the lowercase entries of a
+[SCOWL](https://wordlist.aspell.net) size-60 list (the *validity*; capitalised
+and uppercase entries are proper nouns and abbreviations and are excluded so
+web junk like `nd` cannot pass). About 15k words, 130 KB, fetched once per
+session. `python redaction_refiner/words_build.py` rebuilds it; the licence
+notice is `words.LICENSE.txt` next to it.
 
 ## How it attaches
 
 | Plugin | Docs | What it does | Routes |
 |---|---|---|---|
-| `redaction_refiner` | [redaction-refiner/](.) | Redraws redaction bars to the hidden-word extent via surrounding words + punctuation | *(none — fully client-side)* |
+| `redaction_refiner` | [redaction-refiner/](.) | Redraws redaction bars to the hidden-name extent via surrounding words, punctuation and a word list | *(none — fully client-side)* |
 
 - **Trigger** — subscribes to the generic **`redactions:connected`** PDFHooks
   event, emitted by `embedded_text_viewer`'s `utbConnectRedactionsToLines` after
   it snaps redactions to lines. That single emission covers both the span-load
-  path and the post-OCR path (`ocr_tool` calls the same connect function).
+  path (per hydrated page) and the post-OCR path (`ocr_tool` calls the same
+  connect function when its run finishes).
+- **Emits `redaction:refined`** after judging a bar:
+  `{ boxId, source, changed, remnants: [{ text, side }] }`. Generic — it names
+  no consumer; `redaction_matching` listens and turns the remnants into that
+  box's starts-with / ends-with filter unless the user already typed one.
 - **Guarded globals** — `renderBox` (text_tool), `calculateAllWidths`
-  (redaction_matching), `getNaturalSpaceWidth` (text_tool), `GEO` (text_tool).
-  Each call site guards with `typeof … === 'function'`, so the refiner degrades
-  cleanly when a provider is absent — with no surrounding words it simply does
-  nothing.
-- **Manual re-run** — exposes `window.refineAllRedactions()` and
-  `window.refineRedaction(box)` for tooling/console use.
+  (redaction_matching), `getNaturalSpaceWidth` (text_tool), `GEO` (text_tool),
+  `state.namesData` / `state.customCandidates` (redaction_matching). Each call
+  site guards, so the refiner degrades cleanly when a provider is absent — with
+  no surrounding words it simply does nothing.
+- **Manual re-run / inspection** — `window.refineAllRedactions()`,
+  `window.refineRedaction(box, { force: true })`, and the pure helpers on
+  `window.RedactionRefiner` (`classifyToken`, `completions`, `resolveEdge` …).
+  After a run, `box.refineInfo` says what each side was judged to be
+  (`punct` / `word` / `fragment`, the token, the completion and its placement).
+
+## Tests
+
+`python manage.py test redaction_refiner` covers the registration, the word
+list's shape, and — through Node, skipped when `node` is absent — the geometry
+(`tests_js/refiner.test.mjs`): the viewer's globals are stubbed, the shaper is
+a Times-Roman metrics table (Times New Roman is metric-compatible), and the
+fixture rows are real embedded spans of a scanned court filing whose bars were
+measured from the raster. Both fixture bars refine to `SARAH KELLEN`'s width
+from the embedded layer alone, and again — to the same edge — once OCR words
+that read `and` in full are added.
 
 ## Dependencies
 
