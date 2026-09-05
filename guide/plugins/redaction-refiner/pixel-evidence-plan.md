@@ -342,3 +342,64 @@ session builds, in order, and the contract it plugs into:
 - **Shadow reads, opt-in.** Under `--shadow`, dark-edge composites judge too
   (§8's benchmark: never wrong synthetically, wrong on real boxes). With a
   six-name list the odds change; measure before enabling.
+
+## What changed while building it (2026-09-05)
+
+The design held; the details that measurement forced are these, in the order
+they were found (each one first showed up as the *truth* being contradicted on
+`tools/hypothesis-bench.mjs`, the one outcome the plan forbids):
+
+- **The producer's metrics are not the set's.** A name's pens are the
+  accumulated advances only for the font build the page was set in, and never
+  across a kern pair: v3's `OPERATED` has its `T` 1.75 px left of the plain
+  advance (the `AT` pair), and a 2008 Times draws the current outlines at other
+  advances. `render.js pageMetrics` measures both from the page's own pens —
+  the median of next.pen − pen per glyph and per pair over the certified lines
+  (a pair kerns at ≥ ⅜ px) — and `layoutLine` takes them. The seam builds the
+  table from the page's OCR boxes; the bench from the read. Measured advances
+  also tightened the width tie itself: 68 → 59 decoys on v3 p2.
+- **Pens are searched.** The first glyph within 1¼ px of the space estimate on
+  the ¼-px lattice, the last glyph within 1¼ px of the accumulated advance
+  (the two glyphs that carry evidence under a full-height bar); a pen the set
+  cannot draw (a phase it lacks) never outranks a judged one.
+- **Only edge columns judge.** A bar's top and bottom rows carry the
+  neighbouring lines' descenders and ascenders and the corners where two bars
+  meet; over the box's own rows the column's bar byte is its maximum seen on
+  two rows (the reader's mode is fooled by a uniform stem shadow), dark edges
+  (< 160) stay dark, and black under a light edge is destroyed — a black glyph
+  pixel and another bar's body composite to the same 0.
+- **Unvoted flush lines are destroyed, not open.** When the hidden glyphs
+  shadow most of an edge column (a bar no taller than its text) the reader's
+  constancy vote fails and the column stays unpadded; the tester treats the
+  columns and rows flush against a box body as the bar's edge with an alpha
+  nobody measured. The reader's own small-box detector learnt the matching
+  lesson: a row whose extent differs by up to 3 px continues the stack, and the
+  box takes the mode of its rows' extents (a 34-px bar over `VISA`, leaked by
+  two columns, had no box at all before).
+- **Unexplained ink is judged in the reader's band rows only**, with the
+  neighbour words *and* the neighbouring lines' glyphs drawn as explained — at
+  a 12-px pitch the line above's descenders share rows with this line's
+  ascenders.
+
+What the bench says now (tol0 `npm run bench:hypothesis`, 15 settings each):
+Courier page 22 words — truth consistent 113, contradicted **0**, no-evidence
+217; decoys 1,205 of 1,575 contradicted, 9 ties (`-0800` / `-0000`,
+`01:13:54` / `01:12:12` — the difference is under the body, which is the
+premise measured). Times page 42 words — truth consistent 168, contradicted 1
+(`Record`, whose only space estimate is the page's fallback, 1.08 px off),
+no-evidence 461; decoys 705 of 885 contradicted, 0 ties. On the reference
+document the item-2 bar tested with its five font-unit ties by pixels alone
+keeps SARAH KELLEN (open 9/9, edge 8/8, unexplained 0) and contradicts the
+other four; the item-3 bar is six-way no-evidence. `tools/verify-redactions.mjs`
+asserts both.
+
+Across Recto's 22 test documents (`node tools/verify-redactions.mjs --limit 22
+--max-pages 2`, 2026-09-05): 345 bars, 176 with a candidate list — 0 unique, 0
+tied, 106 no-evidence, 59 with every name contradicted, 11 unscored. The 59
+are the list not containing the truth (the list is names; those bars hide
+e-mail addresses and IDs), which is what *contradicted for all* is for; the
+106 are full-height bars with dark edges, as the plan measured up front.
+
+Not built, by decision: document-level width comparison. Not built yet: the
+bar-padding prior. Shadow reads stay opt-in in the reader and are not used by
+the tester (dark edges carry no evidence either way).
