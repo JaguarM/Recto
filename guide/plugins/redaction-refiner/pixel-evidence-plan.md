@@ -1,11 +1,11 @@
 # Plan — verifying candidate names against the page pixels
 
-*Status: **Phase 0 built** 2026-09-05 (Recto: the pen-exact width and the
-matcher's verdict display, wired to an inert seam); **Phases 1–3 open**, to be
-done from a tol0 session — see the hand-over checklist at the end. Engine work
-lives in tol0 (`engine/`, certified there, synced verbatim); Recto only consumes
-verdicts. Every phase ends with the command that proves it, like
-[../ocr-tool/pixel-view-plan.md](../ocr-tool/pixel-view-plan.md).*
+*Status: **built** 2026-09-05 — Phase 0 (Recto: the pen-exact width and the
+matcher's verdict display) and Phases 1–3 (tol0: `engine/hypothesis.js`, its
+tests and bench; Recto: the seam `ocr_tool/hypothesis-view.js`; the corpus
+report `tools/verify-redactions.mjs`). Engine work lives in tol0 (`engine/`,
+certified there, synced verbatim); Recto only consumes verdicts. What the build
+taught is at the end, under *What changed while building it*.*
 
 ## The premise: verify a list, never read a sliver
 

@@ -134,6 +134,20 @@ this app and edited here.
   the plugin is still just deleting its folder (the cache lives inside it),
   plus this docs folder and its row in [`../README.md`](../README.md).
 
+## The hypothesis seam (`hypothesis-view.js`)
+
+`window.ocrTestHypothesis(box, name) → Promise<verdict | null>` for
+`redaction_matching`: a candidate name is drawn where the refiner put a
+redaction bar, the bar is composited over it (tol0 LAWS §8, bar last) and the
+page bytes outside the bar's black body return `consistent`, `contradicted` or
+`no-evidence` with the pixel counts (`open`, `edge`, `unexplained`), the pens
+and the width fit. It reuses the pixel view's page info (the whitened page,
+`detectObjects` with its edge model, the palette map) and set lookup, and the
+engine's `hypothesis.js` (synced verbatim, certified in tol0 by
+`test/hypothesis.test.js` and `tools/hypothesis-bench.mjs`). Nothing in it
+identifies a sliver; it verifies a short list. Registered after
+`pixel-view.js`; without `redaction_refiner` it returns `null`.
+
 ## Limits
 
 Byte-exact reading requires the document family's renderer to be modelled —

@@ -258,18 +258,35 @@
     // fell under the ≥8 floor and the bottom of the box went unmasked. A row
     // that is solid dark clear across an already-proven box extent is a box row
     // whatever else is fused onto its end.
+    // Rows join a stack when their extents agree within 3 px on each side
+    // (2026-09-05; it was ±1): a glyph glued to a box's edge — under a dark
+    // edge, or composited under a light one — is strictly contiguous with
+    // the body on its own rows and moved that row's extent by 1–3 px, and
+    // those rows used to break the stack in two halves under the 8-row
+    // floor (a 34-px bar over "VISA", leaked by two columns, had no box at
+    // all). The box's extent is the MODE of its rows' extents, per edge: the
+    // body's, not the first row's and not the glyph's. Text still cannot
+    // fake it — a strictly contiguous 9-px-plus run holding to ±3 for 8
+    // rows is a solid blob, and no glyph is one.
     const stacks = [];
     for (const r of shortRuns) {
       const g = stacks.find(g => g.y1 === r.y && (r.wide
         ? r.x0 <= g.x0 + 1 && r.x1 >= g.x1 - 1
-        : Math.abs(g.x0 - r.x0) <= 1 && Math.abs(g.x1 - r.x1) <= 1));
-      if (g) g.y1 = r.y + 1;
-      else if (!r.wide) stacks.push({ y0: r.y, y1: r.y + 1, x0: r.x0, x1: r.x1 });
+        : Math.abs(g.x0 - r.x0) <= 3 && Math.abs(g.x1 - r.x1) <= 3));
+      if (g) { g.y1 = r.y + 1; if (!r.wide) g.exts.push([r.x0, r.x1]); }
+      else if (!r.wide) stacks.push({ y0: r.y, y1: r.y + 1, x0: r.x0, x1: r.x1, exts: [[r.x0, r.x1]] });
     }
+    const modeOf = (exts, k) => {
+      const n = new Map();
+      for (const e of exts) n.set(e[k], (n.get(e[k]) ?? 0) + 1);
+      let best = null;
+      for (const [v, c] of n) if (!best || c > best[1]) best = [v, c];
+      return best[0];
+    };
     // `sb` marks a small box as STACK-born: its extent is evidence from
     // shortRuns, not from `rows`, which the box-extent pass below relies on.
     for (const g of stacks)
-      if (g.y1 - g.y0 >= 8) objects.push({ sb: true, y0: g.y0, y1: g.y1, x0: g.x0, x1: g.x1 });
+      if (g.y1 - g.y0 >= 8) objects.push({ sb: true, y0: g.y0, y1: g.y1, x0: modeOf(g.exts, 0), x1: modeOf(g.exts, 1) });
     // vertical rules (table/quote borders): long solid runs down a column —
     // collected in the fused pass above; the sort restores column-major order
     vcols.sort((a, b) => a.x - b.x || a.y0 - b.y0);
@@ -533,11 +550,15 @@
             rowsDone.add(y);
           }
         };
+        // a column edge is marked on the box's OWN rows only: the padded rows
+        // above and below are its AA rows, and the corner cell there is a
+        // product of two alphas (or, where two bars meet, of two bars) —
+        // neither line's byte, no evidence
         const walkCols = (from, step) => {
           for (let x = from, k = 0; x >= x0 && x < x1 && k < 3; x += step, k++) {
             const m = lineMode(colV(x), true);
             if (m <= 0) break;
-            for (let y = y0; y < y1; y++) {
+            for (let y = o.y0; y < o.y1; y++) {
               edge[y * w + x] = rowsDone.has(y) ? 0 : m;
               if (!rowsDone.has(y)) edgeV[y * w + x] = 1;
             }

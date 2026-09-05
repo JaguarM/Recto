@@ -152,9 +152,10 @@ function pvPageInfo(pageNum) {
   ocrToolState.engine ??= new PageEngine();
   const raw = ocrToolState.engine._pageFor(img);
   const page = BlindOCR.whitenColored(raw, ocrToolState.engine.pageRGBA(img));
-  const info = { page, mask: null, rawMask: null, quant: null };
+  const info = { page, mask: null, rawMask: null, det: null, quant: null };
   try {
     const det = BlindOCR.detectObjects(page);
+    info.det = det;                                        // objects + edge model (hypothesis-view.js)
     info.rawMask = det.mask;
     info.mask = OCRRender.objectMask(det, page.w, page.h);
   } catch (e) { console.warn('pixel view: detectObjects', e); }

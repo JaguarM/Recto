@@ -75,22 +75,76 @@
   // space glyph; the reader calibrates it from the page — spaceCalib). A
   // missing space advance or a character the set does not have is reported in
   // `missing` and contributes nothing; the caller decides what that means.
+  // opts.metrics: the PRODUCER's metrics, measured from a page's pens
+  // (pageMetrics below) — {adv: Map ch → px, kern: Map pair → px}. The set's
+  // advances are the generating font's; a document set in another build of
+  // the same face draws the same glyphs at other advances (a 2008 Times has
+  // the current Times' outlines and a different hmtx), and a kerned pair is
+  // 1–2 px off the plain advance (Times "AT" at 16 px: −1.75). Where the
+  // page shows a glyph or a pair, its measurement wins; the set fills in.
   function layoutLine(set, text, x0, opts) {
-    const spaceAdv = opts?.spaceAdv ?? null;
+    const spaceAdv = opts?.spaceAdv ?? null, m = opts?.metrics ?? null;
     const glyphs = [], missing = [];
-    let x = x0;
+    let x = x0, prev = null;
     for (const ch of text) {
       if (ch === ' ') {
         if (spaceAdv == null) { if (!missing.includes(' ')) missing.push(' '); continue; }
-        x += spaceAdv;
+        x += spaceAdv; prev = null;
         continue;
       }
-      const adv = advanceOf(set, ch);
+      const adv = m?.adv?.get(ch) ?? advanceOf(set, ch);
       if (adv == null) { if (!missing.includes(ch)) missing.push(ch); continue; }
+      if (m?.kern && prev !== null) { const k = m.kern.get(prev + ch); if (k) x += k; }
       glyphs.push({ ch, pen: snapX(x), penRaw: x, adv });
-      x += adv;
+      x += adv; prev = ch;
     }
     return { glyphs, advanceW: x - x0, missing };
+  }
+
+  // The metrics a page's pens imply. For every pair of consecutive glyphs
+  // within a word (gap under half a space) the page shows next.pen − pen,
+  // which is the advance plus the pair's kern plus the difference of two
+  // ¼-px snaps. Snap noise is symmetric, so MEANS cancel it and medians do
+  // not (on a monospace page the median of 7.4077-px advances is 7.5, and
+  // ten of those drift a name by a pixel). A glyph's ADVANCE is the mean of
+  // its occurrences, and it replaces the set's only when it differs by more
+  // than a lattice step (¼ px: another build's hmtx, not noise); a pair
+  // KERNS when the mean of (next.pen − pen − adv) over its occurrences is
+  // at least ⅜ px — more than a snap and its rounding (Times' real pairs
+  // are ½ px and more: Tr −0.50, WA −0.88, AT −1.75). Measured spacing,
+  // never a font table. lines: [{glyphs: [{ch, pen, adv}]}] — the reader's
+  // lines, or Recto's boxes, whose adv is the set's. Returns {adv, kern}.
+  function pageMetrics(lines, spaceAdv) {
+    const gapMax = 0.55 * (spaceAdv || 4);
+    const advObs = new Map(), pairs = [];
+    for (const L of lines) {
+      const g = L.glyphs || [];
+      for (let i = 1; i < g.length; i++) {
+        const d = g[i].pen - g[i - 1].pen;
+        if (d - g[i - 1].adv >= gapMax || d <= 0) continue;        // a space, not a pair
+        const ch = g[i - 1].ch;
+        if (!advObs.has(ch)) advObs.set(ch, { sum: 0, n: 0, set: g[i - 1].adv });
+        const o = advObs.get(ch); o.sum += d; o.n++;
+        pairs.push([ch + g[i].ch, d, ch]);
+      }
+    }
+    const advOf = new Map(), adv = new Map();
+    for (const [ch, o] of advObs) {
+      const mean = o.sum / o.n;
+      const use = o.n >= 4 && Math.abs(mean - o.set) > 0.25 ? mean : o.set;
+      advOf.set(ch, use);
+      if (use !== o.set) adv.set(ch, use);
+    }
+    const kernObs = new Map();
+    for (const [pair, d, ch] of pairs) {
+      const a = advOf.get(ch);
+      if (a == null) continue;
+      if (!kernObs.has(pair)) kernObs.set(pair, { sum: 0, n: 0 });
+      const o = kernObs.get(pair); o.sum += d - a; o.n++;
+    }
+    const kern = new Map();
+    for (const [pair, o] of kernObs) { const k = o.sum / o.n; if (Math.abs(k) >= 0.375) kern.set(pair, k); }
+    return { adv, kern };
   }
 
   // ---- compositing ----
@@ -281,7 +335,7 @@
     return { count: pixels.length, pixels };
   }
 
-  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, renderLine, objectMask, diffLine, residualInk, paste };
+  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, pageMetrics, renderLine, objectMask, diffLine, residualInk, paste };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OCRRender = api;
 })(typeof self !== 'undefined' ? self : this);

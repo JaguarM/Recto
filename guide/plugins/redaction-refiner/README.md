@@ -136,13 +136,32 @@ measured from the raster. Both fixture bars refine to `SARAH KELLEN`'s width
 from the embedded layer alone, and again — to the same edge — once OCR words
 that read `and` in full are added.
 
-## Next: verifying candidates against the page pixels
+## Candidate verdicts from the page pixels
 
 Width cannot split names that tie to the font unit, and a half-exposed glyph is
-not a letter (`A` / `Æ`). The follow-up is a *candidate-driven* check — draw each
-width-fitting name where the refiner says it sits and let the page bytes outside
-the bar contradict it — designed in [pixel-evidence-plan.md](pixel-evidence-plan.md),
-with what it can and cannot do on the test document measured up front.
+not a letter (`A` / `Æ`). So the names that fit the bar by width are *tested*,
+never read: `ocr_tool/hypothesis-view.js` defines the seam
+`window.ocrTestHypothesis(box, name)`, which draws the name where this refiner
+put the bar — the neighbour word's glyph set, baseline, y-phase and ¼-px pens,
+the row's own space — composites the bar over it as the redactor did (tol0
+LAWS §8, bar last) and lets the page bytes outside the bar's black body judge it
+(tol0 `engine/hypothesis.js`, certified there). `redaction_matching` calls it
+after every width recompute and shows the verdict on each chip:
+
+- `✓` **consistent** — every judged pixel matches, no page ink in the name's
+  window is left unexplained, on at least 12 pixels of evidence;
+- `✗` **contradicted** — with the counts in the chip's title;
+- `–` **no evidence** — the bar left nothing to compare (a full-height body
+  with dark edges, the common case), or the set lacks a glyph.
+
+Two consistent names are a tie, and the tie is the answer. Inputs come from
+`neighboursFor(box)` (the neighbour OCR segments and their pens),
+`box.refineInfo` (the row space) and the pixel view's page info; the seam
+returns `null` — with the reason in `OCRHypothesisView.reasons` — when the
+row has no OCR segments, no set is loaded for the face, the raster is not 1:1,
+or no detected box overlaps the bar. Design, measurements and limits:
+[pixel-evidence-plan.md](pixel-evidence-plan.md); the corpus report:
+tol0 `tools/verify-redactions.mjs`.
 
 ## Dependencies
 
