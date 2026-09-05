@@ -237,7 +237,11 @@ to each neighbour (none before a comma) and a name that overruns its right
 neighbour by over 1¼ px is contradicted with the reason `width`; a name that
 ends early is not, and its fit (`penFit`) is on the verdict for the matcher.
 A bar whose list holds exactly one name the page did not contradict, on no
-evidence of its own, is a *survivor* in `tools/verify-redactions.mjs`.
+evidence of its own, is a *survivor* in `tools/verify-redactions.mjs`. The
+bar's own top and bottom rows judge too where they lie inside this line's
+band (a bar padded a row below the baseline shadows the descenders); the
+bars seen so far are padded past them, so that evidence is still waiting
+for a producer that draws its bars tight.
 
 Two consistent names are a tie, and the tie is the answer. Inputs come from
 `neighboursFor(box)` (the neighbour OCR segments and their pens),

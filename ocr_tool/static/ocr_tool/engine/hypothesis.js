@@ -123,7 +123,9 @@
   //          minInk (default 6), fitTol (default 1.25: how far the name's end
 //          may miss the right neighbour's pen less one space)}
   // → { verdict, reason?, missing?, pens, advanceW, penFit, open, edge,
-  //     dark, unexplained, edgeOnly, window: {x0, y0, w, h}, mism, render }
+  //     dark, rows (the share of edge/dark that came from the bar's own
+  //     top/bottom rows), unexplained, edgeOnly, window: {x0, y0, w, h},
+  //     mism, render }
   function testHypothesis(page, det, set, line, box, text, opts) {
     const quant = opts?.quant || null;
     const minInk = opts?.minInk ?? 6;
@@ -163,7 +165,7 @@
     const rank = v => v.reason === 'missing' ? 3 : { consistent: 0, 'no-evidence': 1, contradicted: 2 }[v.verdict];
     let best = null;
     for (const p of pens) {
-      const v = testAtPen(page, det, set, line, text, p, lay0, { quant, minInk, explained, tol, phy, spaceLine, gapRight, trace: opts?.trace });
+      const v = testAtPen(page, det, set, line, text, p, lay0, { quant, minInk, explained, tol, phy, spaceLine, gapRight, judgeRows: opts?.judgeRows, trace: opts?.trace });
       const key = [rank(v), v.open.differ + v.edge.differ + v.dark.differ + v.unexplained];
       if (!best || key[0] < best.key[0] || (key[0] === best.key[0] && key[1] < best.key[1])) best = { v, key };
       if (v.verdict === 'consistent') break;                 // the nearest pen that fits wins
@@ -254,15 +256,22 @@
     const colByte = new Map();
     const barByte = (x, y, ev) => {
       // the reader's mode can be the SHADOW's byte when a stem-adjacent
-      // column is uniform on most rows (153 on a 196 edge); the maximum the
-      // column shows on two rows is the bar's own on every edge, dark ones
-      // included (74 on the reference bar) — corroborated by a second row
-      // that is at least the bar over a 254, the lightest glyph pixel there
-      // is (a stem that shadows 10 of 13 rows left 196 once and 194 once)
+      // column is uniform on most rows (153 on a 196 edge); every composite
+      // is darker than the bar's byte, so the maximum the column shows on
+      // two rows is the bar's own on every edge, dark ones included (74 on
+      // the reference bar)
       const b = boxes.find(o => y >= o.y0 && y < o.y1 && (x === o.x0 - 1 || x === o.x0 || x === o.x1 - 1 || x === o.x1));
       if (!b) return ev;
       const key = x + ':' + b.y0;
       if (colByte.has(key)) return colByte.get(key);
+      // …corroborated by a second row that is at least the bar over a 254,
+      // the lightest glyph pixel there is (a stem that shadows 10 of 13 rows
+      // left 196 once and 194 once). The box's first and last rows vote too:
+      // on a bar padded a row past the band they are the only unshadowed
+      // cells beside a full-height stem — and a corner lighter than the
+      // column (98 on a 56 column) is a single value, uncorroborated. A bar
+      // drawn TIGHT to its text, with the byte on one row beside a digit,
+      // is the case neither rule reaches (the bench's --rows tight)
       const n = new Map();
       for (let yy = b.y0; yy < b.y1; yy++) {
         const i = yy * page.w + x;
@@ -314,7 +323,48 @@
       return false;
     };
 
-    const open = { ink: 0, match: 0, differ: 0 }, edge = { ink: 0, match: 0, differ: 0 }, dark = { ink: 0, match: 0, differ: 0 };
+    // the bar's top and bottom ROWS judge too, where they are this line's
+    // own: strictly inside the box's columns (a corner composites both
+    // edges, and the cell beside an edge column is a corner's neighbour),
+    // within the reader's band rows, and never where a neighbouring line's
+    // glyph inks the cell. A bar padded a row or two below the baseline
+    // shadows the descenders on its bottom row — the g of "Rodgers", the y
+    // of "Lesley" — and a name without one there predicts the bar's byte
+    // where the page shows ink
+    const rowByteCache = new Map();
+    const rowByte = (x, y) => {
+      if (o.judgeRows === false) return 0;
+      const b = boxes.find(o => y >= o.y0 && y < o.y1 && x >= o.x0 && x < o.x1);
+      if (!b || (y !== b.y0 && y !== b.y1 - 1)) return 0;
+      if (x <= b.x0 + 1 || x >= b.x1 - 2) return 0;
+      if (y < jTop || y >= jBot) return 0;
+      if (inkedBy(x, y)) return 0;
+      const key = b.x0 + ':' + y;
+      if (rowByteCache.has(key)) return rowByteCache.get(key);
+      // the row's byte: the corroborated maximum over its interior, and it
+      // must hold the MAJORITY of the row — a descender row is ink on a
+      // fifth of its columns, the cap-top row of an all-caps word on nearly
+      // all of them, and there the maximum is a shadow, not the bar
+      const n = new Map();
+      let cells = 0;
+      for (let xx = b.x0 + 2; xx < b.x1 - 2; xx++) {
+        const i = y * page.w + xx;
+        if (edgeMap[i] && !(edgeV && edgeV[i])) { n.set(page.gray[i], (n.get(page.gray[i]) ?? 0) + 1); cells++; }
+      }
+      const vals = [...n.keys()].sort((p, q) => q - p);
+      let mx = -1;
+      for (let i = 0; i < vals.length; i++) {
+        const own = n.get(vals[i]), next = vals[i + 1];
+        if (own >= 2 || (next !== undefined && next >= (vals[i] * 254) >> 8)) { mx = vals[i]; break; }
+      }
+      let held = 0;
+      for (const [v, c] of n) if (Math.abs(v - mx) <= tol) held += c;
+      const out = mx > 0 && cells >= 6 && held * 2 > cells ? mx : 0;
+      rowByteCache.set(key, out);
+      return out;
+    };
+
+    const open = { ink: 0, match: 0, differ: 0 }, edge = { ink: 0, match: 0, differ: 0 }, dark = { ink: 0, match: 0, differ: 0 }, rows = { ink: 0, match: 0, differ: 0 };
     let unexplained = 0;
     for (let y = wy0; y < wy1; y++) {
       for (let x = wx0; x < wx1; x++) {
@@ -324,11 +374,11 @@
         const g = inR ? r.gray[ry * r.w + rx] : 255, hits = inR ? r.hits[ry * r.w + rx] : 0;
         const mi = (y - wy0) * W + (x - wx0);
         const m = mask ? mask[pOff] : 0;
-        // only the bar's left/right edge COLUMNS judge: its top/bottom rows
-        // carry the neighbouring lines' descenders and ascender tips and the
-        // corners where two bars meet (measured on report's bars and on the
-        // bench), never the hidden name's own ink
-        const ev = m && edgeMap && edgeV && edgeV[pOff] ? barByte(x, y, edgeMap[pOff]) : 0;
+        // the bar's edge COLUMNS judge, and its top/bottom rows where they
+        // are this line's own (rowByte): a row's corners and the cells a
+        // neighbouring line inks are destroyed
+        const isCol = !!(m && edgeMap && edgeV && edgeV[pOff]);
+        const ev = isCol ? barByte(x, y, edgeMap[pOff]) : m && edgeMap && edgeMap[pOff] ? rowByte(x, y) : 0;
         const t = tol && hits > 1 ? 2 * tol : tol;
         if ((m && (!ev || pv === 0)) || (!m && flush(x, y))) {   // body, rule, dust, black under an edge, an unvoted edge line: destroyed
           continue;
@@ -348,10 +398,10 @@
           // user's rule — strip the column's lightest pixels, judge the rest)
           const shadow = Math.abs(pv - ev) > t + slack;
           if (g < 255) {
-            if (!ok) { c.ink++; c.differ++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark' : 'edge' }); }
-            else if (shadow) { c.ink++; c.match++; }
+            if (!ok) { c.ink++; c.differ++; if (!isCol) { rows.ink++; rows.differ++; } mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: (isCol ? '' : 'row-') + (dk ? 'dark' : 'edge') }); }
+            else if (shadow) { c.ink++; c.match++; if (!isCol) { rows.ink++; rows.match++; } }
           }
-          else if (!ok && y >= jTop && y < jBot && !inkedBy(x, y)) { unexplained++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: dk ? 'dark-unexplained' : 'edge-unexplained' }); }
+          else if (!ok && y >= jTop && y < jBot && !inkedBy(x, y)) { unexplained++; mism[mi] = 1; if (o.trace) o.trace.push({ x, y, ev, g, pv, kind: (isCol ? '' : 'row-') + (dk ? 'dark-unexplained' : 'edge-unexplained') }); }
           continue;
         }
         if (g < 255) {                                        // open page: the glyph's own byte
@@ -367,7 +417,7 @@
     const verdict = open.differ || edge.differ || dark.differ || unexplained ? 'contradicted'
       : judged >= minInk ? 'consistent' : 'no-evidence';
     return { verdict, pens: lay.glyphs.map(g => g.pen), advanceW, penFit, pen0,
-      open, edge, dark, unexplained, edgeOnly: open.ink === 0 && edge.ink + dark.ink > 0,
+      open, edge, dark, rows, unexplained, edgeOnly: open.ink === 0 && edge.ink + dark.ink > 0,
       darkOnly: open.ink === 0 && edge.ink === 0 && dark.ink > 0,
       window: { x0: wx0, y0: wy0, w: W, h: H }, mism, render: r,
       ...(verdict === 'no-evidence' ? { reason: judged ? 'below-floor' : 'destroyed' } : {}) };

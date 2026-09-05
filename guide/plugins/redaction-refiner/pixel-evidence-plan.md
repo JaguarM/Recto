@@ -397,7 +397,7 @@ they were found (each one first showed up as the *truth* being contradicted on
 
 What the bench says now (tol0 `npm run bench:hypothesis`, 15 settings each,
 dark edges judged): Courier page 22 words — truth consistent 235, contradicted
-**0**, no-evidence 95; decoys 1,927 of 2,055 contradicted, 20 ties (`-0800` /
+**0**, no-evidence 95; decoys 1,942 of 2,055 contradicted, 20 ties (`-0800` /
 `-0000`, `01:13:54` / `01:12:12`, `Re:` / `To:` two columns in — the
 difference is under the body, which is the premise measured). Times page 42
 words — truth consistent 469, contradicted **0**, no-evidence 161; decoys 890
@@ -451,8 +451,13 @@ gets evidence; the truth is never contradicted (18 bars); where the list
 holds it, it is the one name the page did not contradict (Sarah Kellen on
 the first memo, 9 of 9 others contradicted) — the verifier now counts such
 a bar as a *survivor*. Five truths are missing from the matcher's lists
-(Adriana Mucinska, Lex Wexner, Lesley Groff, Richard Barnett, the source's
-own "Gergory Bledsoe"): the list, not the pixels.
+on their bars (Adriana Mucinska, Lex Wexner, Lesley Groff, Richard Barnett,
+Gregory Bledsoe) although `names.json` holds every one of them: the
+matcher's width window, not the pixels — the page is set in Calibri 1.02,
+whose advances are not the modern Calibri's and which does not kern (the
+user's rule for the old Windows fonts; tol0's calibri102 set lays "Lesley
+Groff" out at 77.24 px against a 77-px bar, "Richard Barnett" 101.49 against
+101.8, "Gregory Bledsoe" 106.95 against 107.5).
 
 Across Recto's first 22 test documents (`node tools/verify-redactions.mjs`,
 2026-09-05, dark edges judged, 5 pages read per document): 361 bars, 183 with
@@ -468,7 +473,19 @@ same bar twice on that page).
 
 Not built, by decision: document-level width comparison (the tester now
 contradicts an overrun; a name that ends early is the matcher's call, on
-`penFit`). Not built yet: the bar-padding prior; the bottom edge row as
-evidence for descenders (a bar padded a row below the baseline shadows a
-`g` — the rows are excluded today for the neighbouring lines' sake). Shadow reads stay opt-in in the reader; the tester judges
+`penFit`). Not built yet: the bar-padding prior.
+
+**The bar's own rows (2026-09-05, last).** The tester now judges a bar's top
+and bottom rows where they are this line's own — inside the box's columns,
+within the band, where no neighbouring line inks the cell, and only when the
+row's byte holds the majority of the row. It was built for the descenders (a
+bar padded one row below the baseline shadows a `g`), and measured: every
+real bar so far is padded past them (the memo's bars end a row below the
+band, the reference's thirteen rows below), so the rows carried nothing on
+any real document; on the bench they added 15 decoy contradictions on the
+Courier page at no cost to the truth. Bars drawn tight to their text
+(`--rows tight` on the bench) are the unsupported case, rows or no rows: the
+reader fragments the box and a column shadowed on every row but one has no
+corroborated byte. Recto's redaction boxes are drawn by hand or by the
+refiner and are padded; the row evidence waits for a producer that is not. Shadow reads stay opt-in in the reader; the tester judges
 dark edges on its own terms (a list, a byte of slack).
