@@ -66,8 +66,19 @@
     return best;
   }
 
-  // set the toolbar's font (and size) — the default for the next added box
-  function select(family, sizePt) {
+  // set the toolbar's font (and size) — the default for the next added box.
+  // source ranks the claim for this document: 'detected' (a plugin measured
+  // the page's face from its pixels) outranks 'declared' (the PDF's font
+  // names) and 'layer' (the text layer's most used face), which are what a
+  // producer wrote, not what the page shows; a weaker claim arriving after a
+  // stronger one is ignored, so the reader's face is not undone by the
+  // layer's spans landing later. Unranked calls (the user's own choice) win.
+  const RANK = { layer: 1, declared: 1, detected: 2 };
+  let chosen = 0;
+  function select(family, sizePt, source) {
+    const rank = source ? (RANK[source] || 1) : 3;
+    if (rank < chosen) return false;
+    if (source) chosen = rank;
     const sel = document.getElementById('fabric-font-family');
     if (sel && family) {
       if (!Array.from(sel.options).some(o => o.value === family)) {
@@ -80,6 +91,7 @@
     }
     const size = document.getElementById('fabric-font-size');
     if (size && sizePt > 0) size.value = Math.round(sizePt * 100) / 100;
+    return true;
   }
 
   catalog.ready = (async () => {
@@ -99,13 +111,14 @@
   })();
 
   PDFHooks.on('document:loaded', async e => {
+    chosen = 0;                                   // a new document: every claim is open again
     await catalog.ready;
     const declared = (e?.pdfFonts || []).map(familyForPdfName).find(Boolean);
-    select(declared || catalog.default, e?.sizePt);
+    select(declared || catalog.default, e?.sizePt, 'declared');
   });
   PDFHooks.on('typography:detected', async e => {
     await catalog.ready;
-    if (e?.fontFamily) select(e.fontFamily, e.sizePt);
+    if (e?.fontFamily) select(e.fontFamily, e.sizePt, 'detected');
   });
 
   // The face's own advances and kern pairs at a pixel size, from HarfBuzz

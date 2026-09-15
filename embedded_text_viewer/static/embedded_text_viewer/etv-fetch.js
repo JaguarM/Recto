@@ -85,10 +85,16 @@ function etvNormalize(spans) {
   if (_utbFetchState.baseApplied) return;
   _utbFetchState.baseApplied = true;
 
-  const fabricSel = document.getElementById('fabric-font-family');
-  if (fabricSel && Array.from(fabricSel.options).find(o => o.value === mostUsedFont)) {
-    fabricSel.value = mostUsedFont;
-    if (typeof textOptions !== 'undefined') textOptions.fontFamily = mostUsedFont;
+  // the layer's most used face as the toolbar default — a 'layer' claim,
+  // which a plugin that measured the page's face (typography:detected)
+  // outranks whether it spoke before or after these spans arrived
+  if (window.FontCatalog?.select) window.FontCatalog.select(mostUsedFont, undefined, 'layer');
+  else {
+    const fabricSel = document.getElementById('fabric-font-family');
+    if (fabricSel && Array.from(fabricSel.options).find(o => o.value === mostUsedFont)) {
+      fabricSel.value = mostUsedFont;
+      if (typeof textOptions !== 'undefined') textOptions.fontFamily = mostUsedFont;
+    }
   }
 
   if (typeof utbState === 'undefined') return;
@@ -289,8 +295,13 @@ function utbConnectRedactionsToLines() {
 // ── Nearest-line helper (exposed so text-tool.js can use it) ──
 
 window._utbFindNearestLine = function (pageNum, y, thresholdMultiplier = 2.0) {
+  // only lines on a shown layer: a new box takes its face and size from what
+  // the user sees, never from a hidden embedded line's declared substitute
+  const cl = document.body.classList;
+  const shown = b => !(b.type === 'embedded' && cl.contains('hide-embedded-text')) &&
+                     !(b.type === 'ocr' && cl.contains('hide-ocr-text'));
   const pageBoxes = utbState.boxes.filter(b => b.page === pageNum &&
-    (b.type === 'embedded' || b.type === 'ocr'));
+    (b.type === 'embedded' || b.type === 'ocr') && shown(b));
   if (!pageBoxes.length) return null;
 
   let nearest = null;

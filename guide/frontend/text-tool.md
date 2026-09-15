@@ -162,5 +162,16 @@ named:
 
 | Event | Emitted by | Effect |
 |---|---|---|
-| `document:loaded` (`pdfFonts`, `sizePt`) | the core viewer | the first declared BaseFont that maps to a catalogue family (`Times-Bold` → Nimbus Roman, `TimesNewRomanPSMT` → Times New Roman), else the default |
-| `typography:detected` (`fontFamily`, `sizePt`, `source`) | any plugin that measured the page (an OCR read emits it when a document finishes reading) | that family and size become the defaults for new boxes |
+| `document:loaded` (`pdfFonts`, `sizePt`) | the core viewer | the first declared BaseFont that maps to a catalogue family (`Times-Bold` → Nimbus Roman, `TimesNewRomanPSMT` → Times New Roman), else the default — a `declared` claim |
+| `typography:detected` (`fontFamily`, `sizePt`, `source`) | any plugin that measured the page (an OCR read emits it when a document finishes reading) | that family and size become the defaults for new boxes — a `detected` claim |
+
+`FontCatalog.select(family, sizePt, source)` ranks the claims per document:
+`detected` (measured from the page's pixels) outranks `declared` (the PDF's
+font names) and `layer` (the embedded text layer's most used face, which
+`embedded_text_viewer` submits when its spans arrive), whichever arrives
+first; the user's own menu choice (no source) always wins. The layer's own
+boxes map their font names through the catalogue with one exception: the
+base-14 names `Times-Roman`, `Helvetica`, `Courier` become Times New Roman,
+Arial and Courier New (`normUtbFont`) — an OCR producer's layer names those
+substitutes over a page set in the Windows face, and MuPDF's URW faces stay a
+menu choice for a page MuPDF drew.

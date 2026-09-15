@@ -146,20 +146,31 @@ function spanToUnified(span) {
 /**
  * Normalize a raw PDF font name to a catalogue family (a CSS family the
  * @font-face rules from fonts.js draw with). The catalogue's aliases decide
- * first — 'Times-Roman' is MuPDF's Nimbus Roman, 'TimesNewRomanPSMT' is
- * Times New Roman, 'Helvetica' is Nimbus Sans — and the substring guesses
- * below only fill in before the catalogue has loaded or for a name it does
- * not list. The single implementation.
+ * ('TimesNewRomanPSMT' is Times New Roman, 'DejaVuSerif' is DejaVu Serif),
+ * with one exception: the base-14 names — 'Times-Roman', 'Helvetica',
+ * 'Courier' — map to the Windows faces set to their metrics (Times New
+ * Roman, Arial, Courier New), not to MuPDF's URW faces the catalogue lists
+ * them under. An OCR producer's text layer names those base-14 substitutes
+ * for a page that was set in the Windows face (every scan of the corpus:
+ * the reader finds Times New Roman and Courier New under a layer that says
+ * Times-Roman and Courier), and the layer's boxes, and a box added beside
+ * them, must show and measure in the page's face. MuPDF's own faces stay a
+ * toolbar choice for a page MuPDF drew. The substring guesses fill in
+ * before the catalogue has loaded or for a name it does not list. The
+ * single implementation.
  */
+const UTB_BASE14_TWIN = { 'Nimbus Roman': 'Times New Roman', 'Nimbus Sans': 'Arial', 'Nimbus Mono PS': 'Courier New' };
 function normUtbFont(name) {
   if (!name) return '';
   const fromCatalog = window.FontCatalog?.familyForPdfName?.(name);
-  if (fromCatalog) return fromCatalog;
+  if (fromCatalog) {
+    const twin = UTB_BASE14_TWIN[fromCatalog];
+    return twin && window.FontCatalog.has(twin) ? twin : fromCatalog;
+  }
   const n = name.replace(/^[A-Z]{6}\+/, '').split(',')[0].trim();
   const lc = n.toLowerCase().replace(/[\s\-_]/g, '');
   if (lc.includes('times')) return 'Times New Roman';
-  if (lc.includes('helvetica')) return 'Nimbus Sans';
-  if (lc.includes('arial')) return 'Arial';
+  if (lc.includes('helvetica') || lc.includes('arial')) return 'Arial';
   if (lc.includes('courier')) return 'Courier New';
   if (lc.includes('verdana')) return 'Verdana';
   if (lc.includes('calibri')) return 'Calibri';
@@ -182,8 +193,14 @@ window.normUtbFont = normUtbFont;
  * Returns { y, h, lineId, font, fontSize } or null.
  */
 function utbFindNearestLine(pageNum, y, threshold = 2.0) {
+  // a line on a hidden layer is not what the user clicked beside: when the
+  // OCR layer is shown and the embedded one hidden, the embedded line's face
+  // (the text layer's declared substitute) must not become the new box's
+  const cl = document.body.classList;
+  const shown = b => !(b.type === 'embedded' && cl.contains('hide-embedded-text')) &&
+                     !(b.type === 'ocr' && cl.contains('hide-ocr-text'));
   const pageBoxes = utbState.boxes.filter(b => b.page === pageNum &&
-    (b.type === 'embedded' || b.type === 'ocr'));
+    (b.type === 'embedded' || b.type === 'ocr') && shown(b));
   if (!pageBoxes.length) return null;
 
   let nearest = null;
