@@ -144,7 +144,10 @@ Three consumers, one source:
 - **`fonts.js`** (loaded first) fetches it, injects an `@font-face` rule per
   installed style (`/static/fonts/<file>`, weight/style set so bold and italic
   resolve to the right file), fills `#fabric-font-family`, and exposes
-  `window.FontCatalog` (`has`, `familyForPdfName`, `select(family, sizePt)`).
+  `window.FontCatalog` (`has`, `familyForPdfName`, `select(family, sizePt)`,
+  `metrics(family, bold, italic, sizePx)` — the face's own advances and kern
+  pairs at a pixel size from `/font-metrics`, cached; what a plugin that
+  measured a page's pens uses to lay pairs the page never wrote).
   SVG text in `font-family: "Nimbus Roman"` is therefore drawn from the same
   file HarfBuzz measures with — the vector face matches the raster face.
 - **`/widths`** takes `family`, `bold`, `italic` and resolves the file through

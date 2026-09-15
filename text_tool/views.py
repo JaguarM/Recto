@@ -5,6 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from pdf_core.logic import geometry as geo
 from .logic import fonts
 from .logic.width_calculator import get_text_widths, get_justified_space_width
+from .logic.font_metrics import font_metrics
 
 
 @csrf_exempt
@@ -58,3 +59,27 @@ def list_fonts(_request):
     """The catalogue: families, their style files and which are installed."""
     return JsonResponse({'families': fonts.families(), 'default': fonts.default_family(),
                          'static': '/static/fonts/'})
+
+
+def font_metrics_view(request):
+    """A catalogue face's own advances and kern pairs at a pixel size —
+    ``?family=&bold=&italic=&size_px=`` — through HarfBuzz. The OCR plugin's
+    pixel view judges a page's pens against this table to learn whether the
+    producer kerned, and lays typed text with it when it did."""
+    family = request.GET.get('family') or fonts.default_family()
+    bold = request.GET.get('bold', '0') in ('1', 'true', 'True')
+    italic = request.GET.get('italic', '0') in ('1', 'true', 'True')
+    try:
+        size_px = float(request.GET.get('size_px') or 16)
+    except ValueError:
+        return JsonResponse({"detail": "size_px must be a number"}, status=400)
+    if not (0 < size_px <= 512):
+        return JsonResponse({"detail": "size_px out of range"}, status=400)
+    font_path = fonts.resolve(family, bold, italic)
+    if not font_path:
+        return JsonResponse({"detail": "No font installed for that family"}, status=404)
+    try:
+        data = font_metrics(font_path, round(size_px, 6))
+    except RuntimeError as e:
+        return JsonResponse({"detail": str(e)}, status=503)
+    return JsonResponse({"family": family, "bold": bold, "italic": italic, **data})

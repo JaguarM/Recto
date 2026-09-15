@@ -109,6 +109,53 @@ function pvSpaceAdv(box, set) {
   return (PV_SPACE_EM[family] ?? 0.25) * set.sizePx;
 }
 
+// ── the producer's law ────────────────────────────────────────
+// the law the pixel view lays a box with: the one learned for its set on its
+// page from the certified pens (window.ocrProducerFor). A set the page never
+// certified gets the least assumption — the PDF's 1/1000-em advances at the
+// set's size, no kerning — and the status line says it is assumed.
+const PV_DEFAULT_LAW = { quant: 1000, scale: 1, kerned: false, kern: new Map(), adv: new Map(), assumed: true };
+function pvLaw(box, set) {
+  return window.ocrProducerFor?.(box.page, set.name) || PV_DEFAULT_LAW;
+}
+// A box laid through the law (render.js layoutLine). A reader line is laid
+// the way lineLayout says it was: every word from its own solved sub-lattice
+// start (the producer's starts were floats the page shows snapped) and each
+// break's width solved between the laid words — so an unedited line returns
+// its pens, and an edit keeps the words before it. Each glyph carries the set
+// that drew it on the page (a union line mixes a bold label with a regular
+// value) for as long as the text still lines up with the reader's entries;
+// new text draws with the primary set. Returns {glyphs:[{ch, pen, set}],
+// advanceW, missing}.
+function pvLayout(box, primary, byName, law) {
+  const ents = (box.ocr?.entries || []).filter(e => e.ch !== '□');
+  // the set and law of every glyph the reader read (union lines), while the
+  // text still lines up with the entries
+  const text = [...box.text].filter(c => c !== ' ');
+  const same = ents.length === text.length && ents.every((e, k) => e.ch === text[k] || e.ch === 'ﬁ' || e.ch === 'ﬂ');
+  const setOf = src => (src && byName.get(src)) || primary;
+  const bySrc = new Map(), metricsBySet = new Map();
+  for (const e of ents) if (e.src && !bySrc.has(e.src)) {
+    const st = setOf(e.src), m = window.ocrProducerFor?.(box.page, st.name) || law;
+    bySrc.set(e.src, { sizePx: st.sizePx, m });
+    metricsBySet.set(st.name, m);
+  }
+  let start = box.x, spaceWidths = null;
+  if (ents.length && typeof OCRRender.lineLayout === 'function') {
+    const ll = OCRRender.lineLayout({ entries: ents }, primary.sizePx, law, box.ocr?.spaceAdv, bySrc);
+    start = box.x + ll.delta;
+    spaceWidths = ll.spaceWidths;
+  }
+  const lay = OCRRender.layoutLine(primary, box.text, start, { spaceAdv: pvSpaceAdv(box, primary), spaceWidths, metrics: law,
+    glyphSets: same ? ents.map(e => setOf(e.src)) : null, metricsBySet });
+  const glyphs = lay.glyphs.map(g => ({ ch: g.ch, pen: g.pen, set: g.set || primary }));
+  return { glyphs, advanceW: lay.advanceW, missing: lay.missing };
+}
+const pvLawLabel = law => !law ? '' :
+  `${law.quant ? `1/${law.quant} em` : 'hmtx'} × ${(+law.scale).toFixed(5)}` +
+  (law.kerned ? ', kerned' : law.tableKnown ? ', no kerning' : '') +
+  (law.assumed ? ' (assumed — nothing certified in this set on the page)' : law.words != null ? ` (${law.exact}/${law.words} words written back)` : '');
+
 function pvTint(box) {
   const c = box.color;
   if (typeof c === 'string') {
@@ -243,13 +290,20 @@ function utbPixelRender(box, xs, baseline) {
       glyphs.push({ ch, pen: xs[i], set: (cp.src && byName.get(cp.src)) || primary });
     }
   } else {
-    const lay = OCRRender.layoutLine(primary, box.text, box.x, { spaceAdv: pvSpaceAdv(box, primary) });
+    // a fresh layout under the producer's law for this set on this page
+    // (ocr-tool.js ocrLearnProducer), from the start the line was laid from
+    // when the box is a reader line, with the line's own measured gaps for
+    // its spaces: an unedited line comes back at its pens, an edit continues
+    // under the same law, and a typed box is laid as this document's
+    // producer would have laid it
+    const law = pvLaw(box, primary);
+    const lay = pvLayout(box, primary, byName, law);
     if (lay.missing.length) {
       pvForget(box.id);
       pvNote(box, `no glyph for "${lay.missing.join('')}" in ${primary.name}`);
       return null;
     }
-    for (const g of lay.glyphs) glyphs.push({ ch: g.ch, pen: g.pen, set: primary });
+    glyphs.push(...lay.glyphs);
     advanceW = lay.advanceW;
   }
   if (!glyphs.length) { pvForget(box.id); return null; }
@@ -447,6 +501,7 @@ function pvReportSelection() {
   const short = (box.text || '').length > 28 ? box.text.slice(0, 28) + '…' : box.text;
   const r = pixelView.results.get(id);
   if (!r) { setOcrStatus(`MuPDF pixels: "${short}" drawn as SVG (${pixelView.notes.get(id) || 'no glyph set'})`); return; }
+  const law = window.ocrProducerFor?.(box.page, r.set.split('+')[0]);
   setOcrStatus(`MuPDF pixels: "${short}" · ${r.set} · ${r.ink ?? '?'} ink px · ` +
     (r.count === null ? 'page raster not loaded'
       : r.count === 0 ? (r.tol ? `drawn glyphs match the page within ±${r.tol}` : 'drawn glyphs match the page exactly')
@@ -456,7 +511,8 @@ function pvReportSelection() {
     (r.within ? ` · ${r.within} within tolerance` : '') +
     (r.masked ? ` · ${r.masked} under a box/rule` : '') +
     (r.phy ? ` · y-phase ${r.phy}` : '') +
-    (r.outside ? ` · ${r.outside} off page` : ''));
+    (r.outside ? ` · ${r.outside} off page` : '') +
+    (law ? ` · law ${pvLawLabel(law)}` : ''));
 }
 
 (function wirePixelView() {
@@ -488,7 +544,34 @@ PDFHooks.on('document:loaded', () => {
 // as pixels with its diff verdict; verdict(page) sums them up per page. Both
 // settle the residual pass first, so their numbers are final.
 window.PixelView = {
-  state: pixelView, setOn: pvSetOn, setDiff: pvSetDiff, verdict: pvPageVerdict, settle: pvSettle,
+  state: pixelView, setOn: pvSetOn, setDiff: pvSetDiff, verdict: pvPageVerdict, settle: pvSettle, invalidate: pvInvalidate,
+  // the laws learned on a page (ocr-tool.js), and a box laid AGAIN through
+  // the layout path — ignoring its measured pens — with the pens that come
+  // back, whether they are the reader's, and the pixel diff of that layout:
+  // the test that typed text is the page
+  laws: pageNum => (window.ocrProducerList?.(pageNum) || []).map(m => ({ set: m.set, family: m.family, quant: m.quant, scale: m.scale, kerned: m.kerned, tableKnown: !!m.tableKnown, words: m.words, exact: m.exact, glyphs: m.glyphs, hit: m.hit })),
+  relayout(id) {
+    const box = utbState.getBox(id);
+    if (!box || !ocrToolState.sets || typeof OCRRender === 'undefined') return null;
+    const setInfo = pvSetsForBox(box);
+    if (!setInfo) return null;
+    const { primary } = setInfo;
+    const { byName } = setInfo;
+    const law = pvLaw(box, primary);
+    const lay = pvLayout(box, primary, byName, law);
+    const ents = (box.ocr?.entries || []).filter(e => e.ch !== '□');
+    const pens = lay.glyphs.map(g => g.pen);
+    const penExact = ents.length === pens.length && ents.every((e, k) => Math.abs(e.pen - pens[k]) < 1e-9);
+    let count = null, ink = null;
+    const info = pvPageInfo(box.page);
+    if (info && !lay.missing.length && typeof window.computeBaseline === 'function') {
+      const r = OCRRender.renderLine(primary, lay.glyphs, OCRRender.snapY(window.computeBaseline(box)), { phy: box.ocr?.phy || 0 });
+      const d = OCRRender.diffLine(r, info.page, box.ocr?.quant ? pvQuant(info) : null, info.mask, box.ocr?.tol || 0);
+      count = d.count; ink = d.ink;
+    }
+    return { id, page: box.page, text: box.text, set: primary.name, clean: box.ocr?.clean ?? null,
+      law: { quant: law.quant, scale: law.scale, kerned: law.kerned, assumed: !!law.assumed }, pens, penExact, count, ink, missing: lay.missing };
+  },
   report() {
     if (pixelView.dirty.size) pvSettle();
     return [...pixelView.results.entries()].map(([id, r]) => {

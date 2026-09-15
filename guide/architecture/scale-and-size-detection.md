@@ -114,7 +114,7 @@ Email documents and some word processors produce one span per word. If no span r
 Taking the median can return a size that bridges two distinct clusters (e.g., headers at 14 pt and body at 12 pt could produce a median of 13 pt). The mode always returns an actually-observed size, and it naturally favours whichever size appears most often in the document.
 
 **Step 4 — Round to 0.5 pt.**
-PyMuPDF returns sub-point sizes like `11.38`, `10.86`, `12.02`. These are rendering artifacts; the original font size is almost always a whole or half-point value. Rounding `× 2 / 2` snaps each span's size to the nearest 0.5 pt before the frequency count, so `10.86`, `10.90`, and `10.94` all vote for `11.0` rather than splitting into three separate bins.
+Each span's size is the bbox height over the face's (ascender − descender), not PyMuPDF's `size`: that field is the text-matrix expansion, which an OCR layer's per-word horizontal scaling (`Tz`) inflates by sqrt(Tz), so an 11.46 pt layer read 11.7–11.95 word by word. The exact value still carries sub-point noise on some producers; the original font size is almost always a whole or half-point value. Rounding `× 2 / 2` snaps each span's size to the nearest 0.5 pt before the frequency count, so `10.86`, `10.90`, and `10.94` all vote for `11.0` rather than splitting into three separate bins.
 
 ### How the frontend uses these values
 

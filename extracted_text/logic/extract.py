@@ -26,7 +26,7 @@ Each span:
         "w":        float,  # width  in image pixels
         "h":        float,  # height in image pixels
         "fontSize": float,  # font size in image pixels
-        "sizePt":   float,  # font size in PDF points
+        "sizePt":   float,  # font size in PDF points (the Tfs — see _span_size_pt)
         "font":     str,    # raw PDF font name
         "flags":    int,    # PyMuPDF flag bits (bold=16, italic=2, ...)
         "lineId":   str,    # "page_lineNum" — spans on the same line share this
@@ -182,6 +182,25 @@ def _get_page_image(doc: fitz.Document, page_index: int):
     return img_bytes, best_rect
 
 
+def _span_size_pt(span: dict) -> float:
+    """The span's font size (Tfs) in points.
+
+    PyMuPDF's ``size`` is the text matrix expansion, sqrt(|det|), which an
+    OCR layer's horizontal scaling (``Tz`` — one per word, 60..150 %)
+    inflates by sqrt(Tz): an 11.46 pt layer reads 11.7..11.95 word by word.
+    The vertical extent of the span is unscaled by Tz, so the size is exactly
+    the bbox height over the face's (ascender − descender).
+    """
+    size = span.get("size", 12.0)
+    bbox = span.get("bbox")
+    asc, desc = span.get("ascender"), span.get("descender")
+    if bbox and asc is not None and desc is not None and (asc - desc) > 0:
+        h = bbox[3] - bbox[1]
+        if h > 0:
+            return h / (asc - desc)
+    return size
+
+
 def _extract_spans(page: fitz.Page, page_num: int, img_rect: fitz.Rect) -> list:
     """
     Extract all text spans from a PDF page and convert their coordinates from
@@ -259,10 +278,10 @@ def _extract_spans(page: fitz.Page, page_num: int, img_rect: fitz.Rect) -> list:
                     continue
                 y1 = min(y1, max_y)
 
-                # Map Helvetica → Calibri for consistent browser rendering
+                # The raw PDF font name: the viewer maps it through the font
+                # catalogue (unified-text-box.js normUtbFont). An OCR layer's
+                # names are the OCR producer's substitutes, never the page's.
                 font = span.get("font", "unknown")
-                if "helvetica" in font.lower():
-                    font = "Calibri"
 
                 # Per-character x-offsets and advance widths relative to span
                 raw_chars = span.get("chars", [])
@@ -311,7 +330,7 @@ def _extract_spans(page: fitz.Page, page_num: int, img_rect: fitz.Rect) -> list:
                 if current_group:
                     char_groups.append(current_group)
 
-                size_pt = span.get("size", 12.0)
+                size_pt = _span_size_pt(span)
 
                 for group in char_groups:
                     chars = []

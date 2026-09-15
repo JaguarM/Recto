@@ -193,7 +193,16 @@
       // option-bar controls now (e.g. webgl_mask wires its mask toggle here).
       await PDFHooks.emit('ui:ready');
 
-      // 3. Auto-load the sample document on startup
+      // 3. Auto-load the sample document on startup — after every script in
+      // the page has run. Plugin scripts (scripts_after_app) come after this
+      // one and subscribe to 'document:loaded' when they parse; a fast server
+      // could answer /open-default and render page 1 before they had, and the
+      // event would fire for nobody (the startup document then showed no
+      // embedded text and no OCR until the next load). DOMContentLoaded is
+      // the point at which every synchronous script has executed.
+      if (document.readyState === 'loading') {
+        await new Promise(r => document.addEventListener('DOMContentLoaded', r, { once: true }));
+      }
       try {
         const resp = await fetch('/open-default');
         if (resp.ok) {

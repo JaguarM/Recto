@@ -305,6 +305,10 @@ function ocrAddBoxes(pageNum, img, res, pass) {
       }));
       box.ocrSource = true;
       box.ocr = { clean: !!L.clean, tol: pass.tol || 0, quant: !!pass.quant,
+        // the reader's entries for this segment (offset, glyph, pen, advance,
+        // drawing set) — what the pixel view re-lays an EDITED line from: the
+        // unchanged part keeps its pens, the rest follows the producer's law
+        entries: segLine.entries,
         union: !!pass.union, font: L.font, baseline: L.baseline, fails: L.fails.length,
         // the y-phase records the reader pinned the line to (0, or 0.5 on a
         // legacy set) — the pixel view re-draws with the same records
@@ -315,13 +319,20 @@ function ocrAddBoxes(pageNum, img, res, pass) {
         // the reader's own residual: ink pixels in the band it could not explain
         // (clean ⇔ no fails and residual 0)
         residual: L.residual ?? 0,
-        // the page-calibrated space advance (engine spaceCalib) — what a
-        // re-layout of edited text uses for its spaces
-        spaceAdv: res.spaceAdv ?? null };
+        // the space this line was shaped with — its set's calibration on the
+        // page (a Times header and a Courier body differ), the page's when a
+        // cached read predates per-set calibration — what a re-layout of
+        // edited text uses for a new break
+        spaceAdv: L.spaceAdv ?? res.spaceAdv ?? null };
     }
     tally.lines++;
     if (L.clean) tally.clean++;
   }
+
+  // the law this page's producer laid its text with, per set — learned from
+  // the certified pens once they are boxes (async: it waits for the font's
+  // kern table; the pixel view redraws when it lands)
+  ocrLearnProducer(pageNum, res);
 
   // detected redaction rectangles -> redaction boxes (the same kind the Add
   // Box tool creates; the matching suite picks them up when installed)
@@ -336,6 +347,66 @@ function ocrAddBoxes(pageNum, img, res, pass) {
   }
 
   return tally;
+}
+
+// ── The producer's law ────────────────────────────────────────
+// A certified line fixes the face, the size and every pen; how the producer
+// ARRIVED at the pens — advances at the PDF's 1/1000 em or the font's hmtx,
+// the size it laid at, whether it kerned — is not in the glyph set, and it
+// differs between documents in the same face (measured in Recto's lab,
+// 2026-09: Courier New at the PDF's 7.8 px where the set says 7.80127;
+// Nimbus Mono laid at 12.36 px where the set says 12.359375; one email
+// header kerned with the font's table, its body not). It is learned per
+// (page, set) from the certified pens by engine/render.js producerMetrics,
+// judged against the face's own kern table from text_tool
+// (FontCatalog.metrics → /font-metrics, HarfBuzz), so a pair the page never
+// wrote — "Yo", "Ve" — is still laid the way THIS producer would have. The
+// pixel view lays edited and typed text with it (window.ocrProducerFor).
+const ocrProducer = new Map();   // `${docHash}|${page}|${set}` -> the law (render.js producerMetrics + set, family, tableKnown)
+
+const ocrProducerKey = (pageNum, setName) => `${state.docHash}|${pageNum}|${setName}`;
+
+// the law learned for a set on a page, or null (not learned yet / nothing certified in it)
+window.ocrProducerFor = function (pageNum, setName) {
+  return ocrProducer.get(ocrProducerKey(pageNum, setName)) || null;
+};
+// every law learned on a page (status, tests)
+window.ocrProducerList = function (pageNum) {
+  const pre = `${state.docHash}|${pageNum}|`;
+  return [...ocrProducer.entries()].filter(([k]) => k.startsWith(pre)).map(([, m]) => m);
+};
+
+async function ocrLearnProducer(pageNum, res) {
+  if (typeof OCRRender === 'undefined' || typeof OCRRender.producerMetrics !== 'function') return;
+  const hash = state.docHash;
+  const bySet = new Map();   // set name -> { sizePx, lines: [{entries}] }
+  for (const L of res.lines || []) {
+    if (!L.clean || !L.font || !L.entries?.length) continue;
+    const sizePx = L.set?.sizePx;
+    if (!sizePx) continue;
+    // a union line reports one font label; each glyph carries the set that drew it
+    const names = new Set([L.font.split('+')[0]]);
+    for (const e of L.entries) if (e.src) names.add(e.src);
+    for (const name of names) {
+      const own = L.entries.filter(e => e.ch !== '□' && (e.src || L.font.split('+')[0]) === name);
+      if (own.length < 2) continue;
+      if (!bySet.has(name)) bySet.set(name, { sizePx, lines: [] });
+      bySet.get(name).lines.push({ entries: own });
+    }
+  }
+  let learned = 0;
+  for (const [name, { sizePx, lines }] of bySet) {
+    const { family, bold, italic } = ocrFontFromSetName(name);
+    let table = null;
+    try { table = (await window.FontCatalog?.metrics?.(family, bold, italic, sizePx))?.kern || null; } catch { table = null; }
+    if (hash !== state.docHash) return;                 // the document changed while the table was fetched
+    const m = OCRRender.producerMetrics(lines, { sizePx, kernTable: table, spaceAdv: res.spaceAdv ?? null });
+    m.set = name; m.family = family; m.tableKnown = !!table;
+    ocrProducer.set(ocrProducerKey(pageNum, name), m);
+    learned++;
+  }
+  // boxes laid by the law (edited or typed text) are drawn again with it
+  if (learned && window.PixelView?.state?.on) { window.PixelView.invalidate?.(); window.renderAllTextLayers?.(); }
 }
 
 // ── Precomputed cache (startup document only) ─────────────────

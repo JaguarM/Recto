@@ -115,6 +115,19 @@ def iter_page_rasters(doc):
             yield found
 
 
+def _span_size(span):
+    """The span's font size in points. PyMuPDF's ``size`` is the text-matrix
+    expansion, which an OCR layer's per-word horizontal scaling (``Tz``)
+    inflates by sqrt(Tz); the bbox height over (ascender − descender) is the
+    unscaled size (same rule as extracted_text's extractor)."""
+    size = span.get("size", 0)
+    bbox = span.get("bbox")
+    asc, desc = span.get("ascender"), span.get("descender")
+    if bbox and asc is not None and desc is not None and (asc - desc) > 0 and bbox[3] > bbox[1]:
+        return (bbox[3] - bbox[1]) / (asc - desc)
+    return size
+
+
 def _suggested_size(spans):
     """Mode of body-text span sizes, rounded to the nearest 0.5 pt.
 
@@ -183,7 +196,7 @@ def load_pdf_meta(path):
                         for span in line.get("spans", []):
                             sample_spans.append({
                                 "text": span.get("text", "").strip(),
-                                "font": {"size": span.get("size", 0)},
+                                "font": {"size": _span_size(span)},
                             })
             except Exception as e:
                 print(f"Error sampling text spans on page {page_num}: {e}")

@@ -75,28 +75,50 @@
   // space glyph; the reader calibrates it from the page — spaceCalib). A
   // missing space advance or a character the set does not have is reported in
   // `missing` and contributes nothing; the caller decides what that means.
-  // opts.metrics: the PRODUCER's metrics, measured from a page's pens
-  // (pageMetrics below) — {adv: Map ch → px, kern: Map pair → px}. The set's
-  // advances are the generating font's; a document set in another build of
-  // the same face draws the same glyphs at other advances (a 2008 Times has
-  // the current Times' outlines and a different hmtx), and a kerned pair is
-  // 1–2 px off the plain advance (Times "AT" at 16 px: −1.75). Where the
-  // page shows a glyph or a pair, its measurement wins; the set fills in.
+  // opts.metrics: the PRODUCER's law, measured from a page's pens —
+  // {quant, scale, kern: Map pair → px, adv: Map ch → px} from producerMetrics
+  // (below), or the older {adv, kern} of pageMetrics. quant rounds every
+  // advance the set knows to 1/quant em (1000: the PDF's /Widths), scale is
+  // the size the producer laid at over the set's sizePx, kern is added
+  // between two glyphs of a word, and an adv entry overrides a glyph
+  // outright. The set's advances are the generating font's; a document set
+  // in another build of the same face draws the same glyphs at other
+  // advances (a 2008 Times has the current Times' outlines and a different
+  // hmtx), and a kerned pair is 1–2 px off the plain advance (Times "AT" at
+  // 16 px: −1.75). Where the page shows the law, the law wins; the set fills
+  // in every glyph the page never wrote. opts.spaceWidths: one width per
+  // space in text order (a certified line's own gaps), falling back to
+  // spaceAdv — re-laying an unedited line then returns its pens.
   function layoutLine(set, text, x0, opts) {
     const spaceAdv = opts?.spaceAdv ?? null, m = opts?.metrics ?? null;
+    const spaceWidths = opts?.spaceWidths ?? null;   // per space, in text order (a line's own measured gaps)
+    // a union line mixes faces (a bold label, a regular value): opts.glyphSets
+    // names the set of each glyph (spaces excluded, in order) and
+    // opts.metricsBySet the law learned for each set; a glyph without one
+    // takes `set` and `metrics`
+    const glyphSets = opts?.glyphSets ?? null, bySet = opts?.metricsBySet ?? null;
     const glyphs = [], missing = [];
-    let x = x0, prev = null;
+    let x = x0, prev = null, prevSet = null, si = 0, gi = 0;
     for (const ch of text) {
       if (ch === ' ') {
-        if (spaceAdv == null) { if (!missing.includes(' ')) missing.push(' '); continue; }
-        x += spaceAdv; prev = null;
+        const w = spaceWidths?.[si] ?? spaceAdv;
+        si++;
+        if (w == null) { if (!missing.includes(' ')) missing.push(' '); continue; }
+        x += w; prev = null;
         continue;
       }
-      const adv = m?.adv?.get(ch) ?? advanceOf(set, ch);
-      if (adv == null) { if (!missing.includes(ch)) missing.push(ch); continue; }
-      if (m?.kern && prev !== null) { const k = m.kern.get(prev + ch); if (k) x += k; }
-      glyphs.push({ ch, pen: snapX(x), penRaw: x, adv });
-      x += adv; prev = ch;
+      const gs = glyphSets?.[gi] || set;
+      const gm = (bySet && gs !== set ? bySet.get(gs.name) : null) ?? m;
+      gi++;
+      let adv = gm?.adv?.get(ch) ?? null;
+      if (adv == null) {
+        adv = advanceOf(gs, ch);
+        if (adv == null) { if (!missing.includes(ch)) missing.push(ch); continue; }
+        adv = lawAdv(adv, gs.sizePx, gm);
+      }
+      if (gm?.kern && prev !== null && prevSet === gs) { const k = gm.kern.get(prev + ch); if (k) x += k; }
+      glyphs.push({ ch, pen: snapX(x), penRaw: x, adv, set: gs });
+      x += adv; prev = ch; prevSet = gs;
     }
     return { glyphs, advanceW: x - x0, missing };
   }
@@ -145,6 +167,190 @@
     const kern = new Map();
     for (const [pair, o] of kernObs) { const k = o.sum / o.n; if (Math.abs(k) >= 0.375) kern.set(pair, k); }
     return { adv, kern };
+  }
+
+  // ---- the producer's law, from a page's certified pens ----
+  // A certified line fixes the face and every pen; it does not say how the
+  // pens were ARRIVED at. Three producers of one corpus lay the same face
+  // three ways (measured in Recto's lab, 2026-09): advances at 1/1000 em —
+  // the PDF's /Widths — where the set carries hmtx at 1/2048 (Courier New at
+  // 13 px: 7.8 px on the page, 7.80127 in the set; one lattice step by the
+  // 30th glyph); an advance size the set's em64-truncated sizePx does not
+  // carry (Nimbus Mono: 12.36 px against 12.359375, LAWS §6); and, on one
+  // email client's header, the font's kern table applied — on the body of
+  // the same document, not. A writer who knows only the pairs the page
+  // shows cannot lay "Yo" on a page that never wrote it, so the law is
+  // learned as STRUCTURE — quantization, scale, kerned-or-not — and every
+  // glyph or pair the set and the font's table know then follows it.
+  //
+  // The test is exact, not statistical. Under a hypothesis, glyph k of a
+  // word with accumulated advance S_k and measured pen p_k demands
+  //   start + S_k ∈ [p_k − ⅛, p_k + ⅛)          (mupdf's snap, LAWS §1)
+  // and the starts that satisfy every glyph of the word are an interval
+  // intersection — non-empty iff the hypothesis writes the word. The
+  // producer's start pen was a float the page only shows snapped, which is
+  // why a start is solved, never assumed.
+  const HALF = 0.125, EPS = 1e-7;
+  const txLen = ch => (ch === 'ﬁ' || ch === 'ﬂ') ? 2 : 1;
+
+  // the start that satisfies the most glyphs of one word: items = [{S, p}]
+  // (advance accumulated from the first glyph, measured pen), base = the
+  // first glyph's measured pen; start = base + delta. grid: restrict the
+  // start to the 1/grid-px lattice (a producer that quantized positions).
+  // Returns {delta, hit, feasible} — feasible when every glyph is satisfied.
+  function solveStart(items, base, grid) {
+    const iv = items.map(({ S, p }) => [p - HALF - base - S, p + HALF - base - S]);
+    let best = { delta: 0, hit: -1 };
+    const cands = new Set();
+    if (grid) { for (let n = Math.ceil((base - 0.5) * grid); n <= Math.floor((base + 0.5) * grid); n++) cands.add(n / grid - base); }
+    else { cands.add(0); for (const [lo] of iv) cands.add(lo + EPS); }
+    for (const d of cands) {
+      let hit = 0;
+      for (const [lo, hi] of iv) if (d >= lo - EPS && d < hi) hit++;
+      if (hit > best.hit || (hit === best.hit && Math.abs(d) < Math.abs(best.delta))) best = { delta: d, hit };
+    }
+    return { delta: best.delta, hit: best.hit, feasible: best.hit === items.length };
+  }
+
+  // a line's words: runs of glyphs with no space between them, drawn by one
+  // set. Entries with text offsets (the reader's) say where the spaces are;
+  // bare glyphs fall back to the gap test pageMetrics uses.
+  function wordsOf(L, spaceAdv) {
+    const g = (L.entries || L.glyphs || []).filter(e => e.ch !== '□');
+    const gapMax = 0.55 * (spaceAdv || 4);
+    const words = [];
+    let w = [];
+    for (let k = 0; k < g.length; k++) {
+      const a = g[k - 1], b = g[k];
+      const brk = !a ? false
+        : (a.src || null) !== (b.src || null) ? true
+        : (b.i != null && a.i != null) ? b.i - a.i - txLen(a.ch) !== 0
+        : (b.pen - a.pen - a.adv >= gapMax || b.pen <= a.pen);
+      if (brk && w.length) { words.push(w); w = []; }
+      w.push(b);
+    }
+    if (w.length) words.push(w);
+    return words;
+  }
+
+  // an advance under a law: quantized to 1/quant em of the set's size, then
+  // scaled to the size the producer laid at
+  const lawAdv = (adv, sizePx, m) => (m?.quant && sizePx ? Math.round(adv / sizePx * m.quant) / m.quant * sizePx : adv) * (m?.scale || 1);
+  const asMap = t => t instanceof Map ? t : new Map(Object.entries(t || {}));
+
+  // the accumulated advances of a word under a law, as solveStart items
+  function wordItems(w, sizePx, m) {
+    const items = [{ S: 0, p: w[0].pen }];
+    let S = 0;
+    for (let k = 1; k < w.length; k++) {
+      S += lawAdv(w[k - 1].adv, sizePx, m);
+      if (m?.kern) { const kv = m.kern.get(w[k - 1].ch + w[k].ch); if (kv) S += kv; }
+      items.push({ S, p: w[k].pen });
+    }
+    return items;
+  }
+
+  // The law that writes the most of a page's certified pens back. lines: the
+  // certified lines of ONE set ({entries: [{i, ch, pen, adv, src}]} — the
+  // reader's — or {glyphs}); opts: {sizePx: the set's, kernTable: the FONT's
+  // kern pairs at sizePx in px, unrounded (HarfBuzz's; null when unknown),
+  // spaceAdv, scaleRange}. Hypotheses: advances at 1/1000 em (a PDF's
+  // /Widths) or the set's own (hmtx), each at a scale searched to 5e-6 — the
+  // size the producer laid at — and, when the font's table is known and the
+  // page has pairs it kerns, kerned with that table or not. Ties go to the
+  // PDF's quantization, to no kerning, to the scale nearest 1: the page
+  // decides, and where it cannot, the least assumption does. Returns
+  // {quant, scale, kerned, kern: Map pair → px as laid, adv: Map (empty —
+  // reserved for per-glyph overrides), sizePx: the laid size, words, glyphs,
+  // hit: pens some start writes, exact: words written entirely, kernable,
+  // alternatives: every hypothesis with its hit}.
+  function producerMetrics(lines, opts) {
+    const sizePx = opts?.sizePx ?? null;
+    const table = opts?.kernTable ? asMap(opts.kernTable) : null;
+    const ws = [];
+    for (const L of lines || []) for (const w of wordsOf(L, opts?.spaceAdv)) if (w.length >= 2) ws.push(w);
+    const glyphs = ws.reduce((n, w) => n + w.length, 0);
+    const empty = { quant: 1000, scale: 1, kerned: false, kern: new Map(), adv: new Map(), sizePx, words: 0, glyphs: 0, hit: 0, exact: 0, kernable: 0, alternatives: [] };
+    if (!ws.length || !sizePx) return empty;
+    let kernable = 0;
+    if (table) for (const w of ws) for (let k = 1; k < w.length; k++) if (table.get(w[k - 1].ch + w[k].ch)) kernable++;
+    const lawKern = (quant, scale) => {
+      const m = new Map();
+      for (const [pair, v] of table) { const lv = lawAdv(v, sizePx, { quant, scale }); if (lv) m.set(pair, lv); }
+      return m;
+    };
+    const score = m => {
+      let hit = 0, exact = 0;
+      for (const w of ws) { const s = solveStart(wordItems(w, sizePx, m), w[0].pen); hit += s.hit; if (s.feasible) exact++; }
+      return { hit, exact };
+    };
+    const better = (a, b) => !b || a.hit > b.hit || (a.hit === b.hit && Math.abs(a.scale - 1) < Math.abs(b.scale - 1) - 1e-12);
+    const combos = [];
+    for (const quant of [1000, null]) { combos.push({ quant, kerned: false }); if (kernable) combos.push({ quant, kerned: true }); }
+    const range = opts?.scaleRange ?? 0.005;
+    const results = [];
+    for (const c of combos) {
+      const ev = scale => ({ quant: c.quant, kerned: c.kerned, scale, ...score({ quant: c.quant, scale, kern: c.kerned ? lawKern(c.quant, scale) : null }) });
+      let best = ev(1);
+      if (best.hit < glyphs) {
+        for (let sc = 1 - range; sc <= 1 + range + 1e-12; sc += 2e-4) { const r = ev(+sc.toFixed(6)); if (better(r, best)) best = r; }
+        const c0 = best.scale;
+        for (let sc = c0 - 2e-4; sc <= c0 + 2e-4 + 1e-12; sc += 5e-6) { const r = ev(+sc.toFixed(7)); if (better(r, best)) best = r; }
+      }
+      results.push(best);
+    }
+    const rank = r => (r.quant === 1000 ? 0 : 1) + (r.kerned ? 2 : 0);
+    results.sort((a, b) => b.hit - a.hit || rank(a) - rank(b) || Math.abs(a.scale - 1) - Math.abs(b.scale - 1));
+    let win = results[0];
+    // a kerned reading must beat the plain one, never tie it
+    if (win.kerned) { const plain = results.find(r => r.quant === win.quant && !r.kerned); if (plain && plain.hit >= win.hit) win = plain; }
+    return { quant: win.quant, scale: win.scale, kerned: win.kerned, kern: win.kerned ? lawKern(win.quant, win.scale) : new Map(), adv: new Map(),
+      sizePx: sizePx * win.scale, words: ws.length, glyphs, hit: win.hit, exact: win.exact, kernable,
+      alternatives: results.map(r => ({ quant: r.quant, kerned: r.kerned, scale: r.scale, hit: r.hit, exact: r.exact })) };
+  }
+
+  // the start a certified line's first word was laid from under a law:
+  // {delta, hit, feasible}. See lineLayout for the whole line.
+  function lineStart(L, sizePx, m, spaceAdv) {
+    const w = wordsOf(L, spaceAdv)[0];
+    if (!w) return { delta: 0, hit: 0, feasible: false };
+    return solveStart(wordItems(w, sizePx, m), w[0].pen);
+  }
+
+  // How a certified line is laid again under a law so that it returns its
+  // own pens: every word from its own solved start, and each break's width
+  // solved in FLOAT between the laid end of one word and the laid start of
+  // the next — never the snapped gap the page shows, which is off by the
+  // two words' start phases. Returns {delta: the first word's start, hit,
+  // feasible: every word written, spaceWidths: one width per space of the
+  // transcript in order, words}. layoutLine(set, text, firstPen + delta,
+  // {metrics, spaceWidths}) then reproduces the line; an edit that keeps the
+  // early words keeps their pens, and text past the edit follows the law.
+  // bySrc: Map src → {sizePx, m} for a union line whose words were drawn by
+  // different sets (each word is one set — wordsOf breaks at a set change).
+  function lineLayout(L, sizePx, m, spaceAdv, bySrc) {
+    const ws = wordsOf(L, spaceAdv);
+    if (!ws.length) return { delta: 0, hit: 0, feasible: false, spaceWidths: [], words: 0 };
+    const lawOf = w => (w[0].src && bySrc?.get(w[0].src)) || { sizePx, m };
+    const starts = ws.map(w => { const l = lawOf(w); return solveStart(wordItems(w, l.sizePx, l.m), w[0].pen); });
+    const spaceWidths = [];
+    let x = ws[0][0].pen + starts[0].delta;     // the float pen, as layoutLine carries it
+    for (let k = 0; k < ws.length; k++) {
+      const w = ws[k], l = lawOf(w);
+      x = w[0].pen + starts[k].delta;
+      for (let g = 0; g < w.length; g++) {
+        if (g && l.m?.kern) { const kv = l.m.kern.get(w[g - 1].ch + w[g].ch); if (kv) x += kv; }
+        x += lawAdv(w[g].adv, l.sizePx, l.m);
+      }
+      if (k + 1 < ws.length) {
+        const a = w[w.length - 1], b = ws[k + 1][0];
+        // spaces at this break: the transcript's count when offsets are known, else one
+        const n = (a.i != null && b.i != null) ? Math.max(1, b.i - a.i - txLen(a.ch)) : 1;
+        const gap = (b.pen + starts[k + 1].delta) - x;
+        for (let i = 0; i < n; i++) spaceWidths.push(gap / n);
+      }
+    }
+    return { delta: starts[0].delta, hit: starts.reduce((n, s) => n + s.hit, 0), feasible: starts.every(s => s.feasible), spaceWidths, words: ws.length };
   }
 
   // ---- compositing ----
@@ -335,7 +541,7 @@
     return { count: pixels.length, pixels };
   }
 
-  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, pageMetrics, renderLine, objectMask, diffLine, residualInk, paste };
+  const api = { snapX, snapY, glyphIndex, advanceOf, layoutLine, lawAdv, pageMetrics, solveStart, wordsOf, producerMetrics, lineStart, lineLayout, renderLine, objectMask, diffLine, residualInk, paste };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.OCRRender = api;
 })(typeof self !== 'undefined' ? self : this);

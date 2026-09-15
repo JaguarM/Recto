@@ -108,6 +108,22 @@
     if (e?.fontFamily) select(e.fontFamily, e.sizePt);
   });
 
-  window.FontCatalog = { has, familyForPdfName, select,
+  // The face's own advances and kern pairs at a pixel size, from HarfBuzz
+  // (/font-metrics): {space, adv: {ch: px}, kern: {pair: px}} or null. A
+  // plugin that learned from a page's pens whether its producer kerned lays
+  // pairs the page never wrote with this table.
+  const metricsCache = new Map();
+  function metrics(family, bold, italic, sizePx) {
+    const key = `${family}|${bold ? 1 : 0}|${italic ? 1 : 0}|${+sizePx}`;
+    if (!metricsCache.has(key)) metricsCache.set(key, (async () => {
+      try {
+        const r = await fetch(`/font-metrics?family=${encodeURIComponent(family)}&bold=${bold ? 1 : 0}&italic=${italic ? 1 : 0}&size_px=${+sizePx}`);
+        return r.ok ? await r.json() : null;
+      } catch { return null; }
+    })());
+    return metricsCache.get(key);
+  }
+
+  window.FontCatalog = { has, familyForPdfName, select, metrics,
     families: () => catalog.families, get ready() { return catalog.ready; }, get default() { return catalog.default; } };
 })();

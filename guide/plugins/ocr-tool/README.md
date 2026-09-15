@@ -32,6 +32,21 @@ text from the pixels — *certified, not guessed*: a line is byte-clean only
 when its glyphs reproduce the page bytes exactly through the producer's
 proven blend law; anything unexplained is an honest `□`.
 
+## Spaces in the transcript
+
+The reader's glyph sets carry no space glyph; a break's spaces are counted
+from its gap (`blindocr.js lineEntries`). Since 2026-09-15 the space is
+calibrated **per set on the page** (a 16-px Times header and a 13-px
+Courier body have different spaces, and one calibration for both wrote
+every Courier space of the startup document's first page as two), and within
+a line the unit is the line's own: gaps that agree with each other within
+two lattice snaps are one space each whatever their width (a justified line
+stretches every gap alike), and where they do not agree a gap counts against
+the line's narrowest-half median, so a typist's double space after a period
+is still two. Each line carries the space it was shaped with
+(`box.ocr.spaceAdv`, `spaceAdv` on the slim line; the page's calibration is
+the fallback for older caches).
+
 ## Precomputed cache for the startup document
 
 The **startup document** (the PDF in `assets/pdfs/`, auto-loaded on open) is
@@ -201,10 +216,35 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
   count. The location is a rebuild of the reader's bookkeeping and can differ
   by a few fringe pixels around a redaction box; the count is the reader's.
 - **Pens.** Measured pens (plus nudges and space overrides) when the box has
-  per-character positions; otherwise a fresh layout from `box.x` through
-  `render.js layoutLine` with the set's advances. Spaces use the reader's
-  page-calibrated space (`box.ocr.spaceAdv`, also stored in the slim cache,
-  payload version 2) or an approximate per-family em fraction.
+  per-character positions; otherwise a fresh layout through `render.js
+  layoutLine` under **the producer's law** (below), from the sub-lattice
+  start the reader line was laid from (`render.js lineStart` over
+  `box.ocr.entries`) and with the line's own measured gaps for its spaces —
+  so an edited line keeps its unchanged pens and continues under the same
+  law. New breaks use the reader's page-calibrated space (`box.ocr.spaceAdv`,
+  also stored in the slim cache, payload version 2) or an approximate
+  per-family em fraction.
+- **The producer's law.** A certified line fixes the face, the size and every
+  pen, not how the producer arrived at them, and that differs between
+  documents in the same face (measured 2026-09: Courier New laid at the
+  PDF's 1/1000-em advance, 7.8 px, where the set's hmtx says 7.80127 — one
+  lattice step by the 30th glyph; Nimbus Mono laid at 12.36 px where the
+  set's em64-truncated size says 12.359375; an email header kerned with the
+  font's table while the body of the same document was not). After each
+  page's boxes exist, `ocr-tool.js ocrLearnProducer` learns, per (page,
+  set), the law that writes the most certified pens back — advances at
+  1/1000 em or the set's hmtx, the laid size searched to 5e-6, kerned with
+  the face's own table or not — with `render.js producerMetrics` and the
+  kern table from `text_tool` (`FontCatalog.metrics` → `/font-metrics`,
+  HarfBuzz). A pair the page never wrote ("Yo", "Ve") is therefore laid with
+  the font's kern only on a page whose producer kerned. `window.ocrProducerFor(page,
+  set)` returns the law; the status line names it on selection (`law 1/1000
+  em × 1.00000, no kerning (300/300 words written back)`); a set the page
+  never certified is laid under the least assumption (1/1000 em, the set's
+  size, no kerning) and the status says `assumed`. `PixelView.laws(page)`
+  and `PixelView.relayout(boxId)` expose the law and a re-layout of any box
+  through this path with its pixel diff — the headless test that typed text
+  is the page.
 - **Diff compares against the reader's page**: the viewer's `<img>` through
   `PageEngine` + `whitenColored`, through the page's palette map when the
   line was read with a palette pass, and never under the reader's object

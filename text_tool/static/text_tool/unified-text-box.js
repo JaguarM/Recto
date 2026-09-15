@@ -144,15 +144,21 @@ function spanToUnified(span) {
 // UnifiedTextBox instances; there is no legacy state.redactions[] to convert from.
 
 /**
- * Normalize a raw PDF font name to a CSS-safe family string.
- * The single implementation — the old duplicate in the pre-SVG overlay module
- * is gone.
+ * Normalize a raw PDF font name to a catalogue family (a CSS family the
+ * @font-face rules from fonts.js draw with). The catalogue's aliases decide
+ * first — 'Times-Roman' is MuPDF's Nimbus Roman, 'TimesNewRomanPSMT' is
+ * Times New Roman, 'Helvetica' is Nimbus Sans — and the substring guesses
+ * below only fill in before the catalogue has loaded or for a name it does
+ * not list. The single implementation.
  */
 function normUtbFont(name) {
   if (!name) return '';
+  const fromCatalog = window.FontCatalog?.familyForPdfName?.(name);
+  if (fromCatalog) return fromCatalog;
   const n = name.replace(/^[A-Z]{6}\+/, '').split(',')[0].trim();
   const lc = n.toLowerCase().replace(/[\s\-_]/g, '');
   if (lc.includes('times')) return 'Times New Roman';
+  if (lc.includes('helvetica')) return 'Nimbus Sans';
   if (lc.includes('arial')) return 'Arial';
   if (lc.includes('courier')) return 'Courier New';
   if (lc.includes('verdana')) return 'Verdana';

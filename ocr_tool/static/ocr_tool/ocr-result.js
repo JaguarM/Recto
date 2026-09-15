@@ -24,6 +24,10 @@ function ocrSlimResult(res) {
     lines: (res.lines || []).map(L => { const src = srcAt(L); return {
       text: L.text, font: L.font, baseline: L.baseline, top: L.top, bot: L.bot,
       phy: L.phy ?? 0, clean: !!L.clean, residual: L.residual ?? 0,
+      // the space this line was shaped with — its set's calibration on the
+      // page (blindocr readPage), since a Times header and a Courier body
+      // on one page have different spaces; absent in older caches
+      ...(L.spaceAdv != null ? { spaceAdv: L.spaceAdv } : {}),
       fails: Array.from(L.fails || []),
       boxes: (L.boxes || []).map(b => Array.from(b)),
       set: L.set ? { maxAsc: L.set.maxAsc, maxDesc: L.set.maxDesc, sizePx: L.set.sizePx } : null,
@@ -39,7 +43,8 @@ function ocrSlimResult(res) {
         return { i: e.i, pen: e.pen, adv: e.adv, ch: e.ch, ...(s ? { src: s } : {}) };
       }),
     }; }),
-    spaceAdv: res.spaceAdv ?? null,                    // page-calibrated space (pixel view re-layout)
+    spaceAdv: res.spaceAdv ?? null,                    // page-calibrated space (the fallback for a line without its own)
+    ...(res.spaceAdvBySet ? { spaceAdvBySet: res.spaceAdvBySet } : {}),
     objects: (res.objects || []).filter(o => o.type === 'box')
       .map(o => ({ type: o.type, x0: o.x0, y0: o.y0, x1: o.x1, y1: o.y1 })),
   };

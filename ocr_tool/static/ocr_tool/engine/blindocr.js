@@ -190,18 +190,40 @@
 
   // entries: glyphs plus □ stand-ins for unreadable clusters, in pen order.
   // Returns per-entry text offsets so the app can build boxes at measured pens.
+  //
+  // How many spaces a gap is. spaceAdv is the SET's space on this page —
+  // readPage calibrates one per set: a 16-px Times header and a 13-px
+  // Courier body on one page have different spaces (4.0 and 7.7 px), and one
+  // calibration for both wrote every Courier space as two (measured
+  // 2026-09-15 on EFTA00434905 p1: 98 of 98 breaks). Within a line the unit
+  // is the line's own: a justified line stretches every gap alike, so gaps
+  // that agree with each other within two snaps (0.7 px between the widest
+  // and the narrowest) are one space each whatever their width (48 of 315
+  // breaks on a justified Times page were two or three spaces before); where
+  // they do not agree, a gap counts against the line's narrowest-half median
+  // (its single space) — a typist's double space after a period is twice its
+  // neighbours, a stretched single is not. A lone gap has no neighbours and
+  // counts against the set's space, as before.
   function lineEntries(L, spaceAdv) {
     const entries = L.glyphs.map(g => ({ ch: g.ch, pen: g.pen, adv: g.adv, score: 1 }));
     for (const col of L.fails) entries.push({ ch: '□', pen: col, adv: 8, score: 0 });
     entries.sort((a, b) => a.pen - b.pen);
     const boxes = L.boxes ?? [];
+    const gaps = [];
+    for (let i = 1; i < entries.length; i++) {
+      const gap = entries[i].pen - (entries[i - 1].pen + entries[i - 1].adv);
+      const isBox = Engine.boxBetween(boxes, entries[i - 1], entries[i]);
+      gaps.push({ gap, isBox, space: !isBox && !!spaceAdv && gap > 0.55 * spaceAdv });
+    }
+    const widths = gaps.filter(g => g.space).map(g => g.gap).sort((a, b) => a - b);
+    const uniform = widths.length >= 2 && widths[widths.length - 1] - widths[0] <= 0.7;
+    const unit = widths.length >= 2 ? widths[(widths.length - 1) >> 1] : spaceAdv;
     let text = '';
     for (let i = 0; i < entries.length; i++) {
       if (i) {
-        const a = entries[i - 1].pen + entries[i - 1].adv, b = entries[i].pen;
-        const gap = b - a;
-        if (Engine.boxBetween(boxes, entries[i - 1], entries[i])) text += ' ';   // a redaction box: one separator, never measured spaces
-        else if (spaceAdv && gap > 0.55 * spaceAdv) text += ' '.repeat(Math.max(1, Math.round(gap / spaceAdv)));
+        const g = gaps[i - 1];
+        if (g.isBox) text += ' ';   // a redaction box: one separator, never measured spaces
+        else if (g.space) text += ' '.repeat(uniform ? 1 : Math.max(1, Math.round(g.gap / unit)));
       }
       entries[i].i = text.length;
       const ch = entries[i].ch;
@@ -240,12 +262,20 @@
     }
     const { lines: kept, objects } = await Engine.readPage(page, sets,
       { tol: opts?.tol, quant: opts?.quant, shadow: opts?.shadow, carry, progress: opts?.progress });
+    // one space calibration per SET on the page (a Times header and a Courier
+    // body differ), the page's over every line as the fallback for a set with
+    // too few gaps to cluster; each line carries the one it was shaped with
     const spaceAdv = Engine.spaceCalib(kept);
+    const bySet = new Map();
+    for (const L of kept) { const n = L.set?.name; if (!n) continue; if (!bySet.has(n)) bySet.set(n, []); bySet.get(n).push(L); }
+    const spaceAdvBySet = {};
+    for (const [n, ls] of bySet) spaceAdvBySet[n] = Engine.spaceCalib(ls) ?? spaceAdv;
     for (const L of kept) {
-      const { entries, text } = lineEntries(L, spaceAdv);
+      L.spaceAdv = (L.set?.name && spaceAdvBySet[L.set.name]) || spaceAdv;
+      const { entries, text } = lineEntries(L, L.spaceAdv);
       L.entries = entries; L.text = text;
     }
-    return { lines: kept, objects, spaceAdv };
+    return { lines: kept, objects, spaceAdv, spaceAdvBySet };
   }
 
   // ---- escalating auto-read (shared by the app and any embedder) ----

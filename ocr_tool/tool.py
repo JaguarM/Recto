@@ -28,15 +28,15 @@ class OcrTool(PDFTool):
         {'path': 'ocr_tool/engine/core.js', 'version': 'v=ab4d2193'},
         {'path': 'ocr_tool/engine/ocr.js', 'version': 'v=b95cb058'},
         {'path': 'ocr_tool/engine/ocr-engine.js', 'version': 'v=61264268'},
-        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=a663fe73'},
-        {'path': 'ocr_tool/engine/render.js', 'version': 'v=d7ecfa23'},
+        {'path': 'ocr_tool/engine/blindocr.js', 'version': 'v=569936de'},
+        {'path': 'ocr_tool/engine/render.js', 'version': 'v=cccd779d'},
         {'path': 'ocr_tool/engine/set-fonts.js', 'version': 'v=29e7faf6'},
         {'path': 'ocr_tool/engine/hypothesis.js', 'version': 'v=f9e013f6'},
         # the adapters (Recto-owned). ocr-result.js is shared with the reader's
         # Worker (ocr-worker.js, fetched by url from ocr-tool.js — not a page script)
-        {'path': 'ocr_tool/ocr-result.js', 'version': 'v=2'},
-        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=9'},
-        {'path': 'ocr_tool/pixel-view.js', 'version': 'v=5'},
+        {'path': 'ocr_tool/ocr-result.js', 'version': 'v=3'},
+        {'path': 'ocr_tool/ocr-tool.js', 'version': 'v=11'},
+        {'path': 'ocr_tool/pixel-view.js', 'version': 'v=8'},
         # the hypothesis seam: window.ocrTestHypothesis for redaction_matching
         {'path': 'ocr_tool/hypothesis-view.js', 'version': 'v=7'},
     ]

@@ -49,3 +49,6 @@ _temp_test_files/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Lab — local measurement tools over the OCR engine (see lab/README.md); never committed
+lab/

@@ -181,6 +181,35 @@ With `scale = 133` and `size` set to the document's body-text size, this matches
 
 ---
 
+## `GET /font-metrics`
+
+A catalogue face's own advances and kern pairs at one pixel size, through
+HarfBuzz — `?family=Times%20New%20Roman&bold=0&italic=0&size_px=16`. The
+OCR plugin's pixel view judges a page's certified pens against this table to
+learn whether the document's producer kerned (`render.js producerMetrics`),
+and lays typed text with it when it did, so a pair the page never wrote is
+still laid as that producer would have. Ligatures are off (`fi` measures as
+f + i). Cached server-side per (file, size); the first call shapes every
+pair once.
+
+### Response — `200 OK`
+
+```json
+{
+  "family": "Times New Roman", "bold": false, "italic": false,
+  "file": "times.ttf", "sizePx": 16.0, "upem": 2048,
+  "space": 4.0,
+  "adv":  { "A": 11.55, "V": 11.55, "e": 7.10, "...": 0 },
+  "kern": { "AV": -2.06, "Yo": -1.60, "Ve": -1.77, "...": 0 },
+  "missing": []
+}
+```
+
+Errors: `400` (`size_px` not a number or out of range), `404` (no file
+installed for the family), `503` (uharfbuzz not installed).
+
+---
+
 ## `GET /fonts-list`
 
 Returns a JSON array of available `.ttf` font filenames from `assets/fonts/`.
