@@ -244,7 +244,15 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
   size, no kerning) and the status says `assumed`. `PixelView.laws(page)`
   and `PixelView.relayout(boxId)` expose the law and a re-layout of any box
   through this path with its pixel diff — the headless test that typed text
-  is the page.
+  is the page. The law is the deterministic part of a producer; a page laid
+  by Word carries, on top of it, Word's own per-glyph rounding, which places
+  the same word differently at different starts (measured 2026-09 on a
+  Times affidavit and on a Word 365 export of the same text: 31 of 36 and
+  26 of 38 repeated words differ). No writer that has only the page can
+  reproduce that — typed text on such a page lands on the producer's pens
+  except for one lattice step on about 2 % of glyphs, and the certified
+  lines themselves are always exact because they are re-laid from their own
+  pens.
 - **Diff compares against the reader's page**: the viewer's `<img>` through
   `PageEngine` + `whitenColored`, through the page's palette map when the
   line was read with a palette pass, and never under the reader's object
