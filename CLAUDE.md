@@ -2,6 +2,15 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## This branch: `client-side-rewrite`
+
+This branch turns Recto into a static website — all server work moves into the
+browser (JavaScript, MuPDF and HarfBuzz as WebAssembly). **Read
+`guide/migration/client-side-rewrite.md` first**: it holds the inventory, the
+target layout, the phases with their acceptance criteria, and the progress
+checklist to keep current. Everything below describes the Django version the
+rewrite starts from (and `main`, which this branch never touches).
+
 ## What this is
 
 Recto is an extensible PDF editor built on Django 6: open a PDF or scanned image, edit/add text with true font metrics (HarfBuzz shaping), mask regions, inspect embedded text. Vanilla JS + Fabric.js + WebGL frontend, no build step, no JS package manager.
