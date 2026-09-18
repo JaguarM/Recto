@@ -21,10 +21,18 @@
   function syncToolbarToBox(box) {
     if (!box) return;
 
+    // The menu must SHOW the box's family even when the catalogue lacks it:
+    // every toolbar change writes the menu's value back into the box
+    // (persistFromToolbar), so a menu left on another family would silently
+    // re-font the box the next time Bold is clicked.
     const ffSel = el('fabric-font-family');
-    if (ffSel) {
-      const opt = Array.from(ffSel.options).find(o => o.value === box.fontFamily);
-      if (opt) ffSel.value = opt.value;
+    if (ffSel && box.fontFamily) {
+      if (!Array.from(ffSel.options).some(o => o.value === box.fontFamily)) {
+        const opt = document.createElement('option');
+        opt.value = box.fontFamily; opt.textContent = `${box.fontFamily} (not installed)`;
+        ffSel.appendChild(opt);
+      }
+      ffSel.value = box.fontFamily;
     }
 
     const fsInput = el('fabric-font-size');
@@ -62,13 +70,20 @@
     const nudgeBtn = el('fabric-nudge-mode');
     if (nudgeBtn) {
       nudgeBtn.classList.toggle('active', utbState.microTypoId === box.id);
-      nudgeBtn.disabled = !box.baseCharPositions?.length;
+      nudgeBtn.disabled = !utbCharsValid(box);
     }
 
     // Kerning is a general text property (drives fontKerning for every box
     // type) and lives in the Style group, always visible — keep it in sync for
     // all selections.
-    const kernI = el('kerning'); if (kernI) kernI.checked = !!box.kerning;
+    const kernI = el('kerning');
+    if (kernI) {
+      kernI.checked = !!box.kerning;
+      const lbl = kernI.closest('label');
+      if (lbl) lbl.title = box.kerningAuto
+        ? "Apply the font's native kerning to this text — currently following the page"
+        : "Apply the font's native kerning to this text";
+    }
 
     // Match group — redaction-only tuning (Tolerance / Uppercase). Reveal it for
     // redaction boxes and reflect the box's values; hide it otherwise (they are
@@ -107,8 +122,7 @@
 
     const newFamily = el('fabric-font-family')?.value || box.fontFamily;
     const inputSize = parseFloat(el('fabric-font-size')?.value);  // points
-    const newSize   = !isNaN(inputSize) ? inputSize : box.sizePt;
-    const fontChanged = newFamily !== box.fontFamily || newSize !== box.sizePt;
+    const newSize   = inputSize > 0 ? inputSize : box.sizePt;     // never 0, negative or NaN
 
     box.fontFamily    = newFamily;
     box.sizePt        = newSize;
@@ -116,7 +130,8 @@
     box.italic        = el('fabric-italic')       ?.classList.contains('active') ?? box.italic;
     box.underline     = el('fabric-underline')    ?.classList.contains('active') ?? box.underline;
     box.strikethrough = el('fabric-strikethrough')?.classList.contains('active') ?? box.strikethrough;
-    box.kerning       = el('kerning')?.checked ?? box.kerning;
+    // (kerning has its own handler: reading the checkbox here would turn a
+    // box that follows the page into one with a fixed choice)
     box.letterSpacing = parseFloat(el('fabric-letter-spacing')?.value) || 0;
     box.defaultSpaceWidth = el('fabric-default-sw')?.classList.contains('active') ?? box.defaultSpaceWidth;
 
@@ -197,7 +212,7 @@
     const box = getSelected();
     if (box) {
       const inputSize = parseFloat(el('fabric-font-size').value);  // points
-      box.sizePt = !isNaN(inputSize) ? inputSize : box.sizePt;
+      box.sizePt = inputSize > 0 ? inputSize : box.sizePt;
       renderBox(box);
       if (box.type === 'redaction' && typeof calculateWidthsForRedaction === 'function') {
         calculateWidthsForRedaction(box.id);
@@ -271,7 +286,7 @@
     }
 
     // Enter micro-typo mode if the box has character positions
-    if (box.baseCharPositions?.length && typeof enterMicroTypo === 'function') {
+    if (utbCharsValid(box) && typeof enterMicroTypo === 'function') {
       enterMicroTypo(box);
       el('fabric-nudge-mode')?.classList.add('active');
     }
@@ -285,6 +300,8 @@
     const box = getSelected();
     if (!box) return;
     box.kerning = el('kerning')?.checked ?? box.kerning;
+    box.kerningAuto = false;                       // the user chose; nothing overrides it again
+    syncToolbarToBox(box);
     renderBox(box);
     if (box.type === 'redaction' && typeof calculateWidthsForRedaction === 'function') {
       calculateWidthsForRedaction(box.id);

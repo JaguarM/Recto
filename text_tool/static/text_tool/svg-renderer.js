@@ -69,7 +69,8 @@ function clearAllSVGLayers() {
  * are shifted by the accumulated delta from the native space widths.
  */
 function computeXPositions(box) {
-  if (!box.baseCharPositions || !box.baseCharPositions.length) {
+  // measured positions belong to the face they were measured in
+  if (!utbCharsValid(box)) {
     return [box.x];
   }
 
@@ -193,6 +194,13 @@ function _updateText(g, box) {
     text = document.createElementNS(SVG_NS, 'text');
     text.classList.add('utb-text');
     g.appendChild(text);
+  }
+
+  // Kerning nobody chose yet follows the page: an analysis plugin may know
+  // whether this page's producer kerned (guarded seam, like utbPixelRender).
+  if (box.kerningAuto && typeof window.utbAutoKerning === 'function') {
+    try { const k = window.utbAutoKerning(box); if (typeof k === 'boolean') box.kerning = k; }
+    catch (e) { console.warn('utbAutoKerning failed for', box.id, e); }
   }
 
   const xs = computeXPositions(box);

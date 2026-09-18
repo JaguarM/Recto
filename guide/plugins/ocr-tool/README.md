@@ -263,7 +263,34 @@ Two toggles in the **MuPDF view** group of the OCR bar (`pixel-view.js`):
   difference) — so zero differing pixels means the same thing as
   the reader's byte-clean. Hidden layers (`hide-ocr-text` /
   `hide-embedded-text`) are not drawn or counted.
-- **Honest limits.** A character the set lacks, a set that is not loaded, or a
+- **Every text setting is drawn.** The bundle holds the faces, styles and
+  sizes the corpus needed; a typed box is set in whatever the toolbar says.
+  `pvSetsForBox` takes, in order: the reader's set(s) while the box is still
+  in the face it was read in (`utbFaceChanged`), a bundled plain set of the
+  box's family, style and size, and otherwise a set **rasterized on demand**
+  from the catalogue's own font file (`FontCatalog.fileUrl` →
+  `engine/ftraster.js loadFace` / `makeSet` — the certified port of mupdf's
+  glyph pipeline that generated the bundle, now fed font bytes; an on-demand
+  set is byte-identical to a generated one, `tol0 test/ftraster.test.js`). So
+  Times bold italic, Arial 9.5 pt or Courier New 11 pt bold italic are mupdf
+  pixels too; making a read line bold switches it to that face and laying it
+  afresh, switching back restores its measured pens and its zero diff.
+  **Underline / strikethrough** are filled rectangles from the face's own
+  metrics (`post` underline, `OS/2` strikeout, top-edge convention) under
+  mupdf's *path* rasterizer — a 17 × 15 sub-sample grid, not the glyph
+  pipeline (`ftraster.js rectCoverage`, `npm run certify:rect`: 0 differing
+  bytes over 4,384 rectangles) — blended after the glyphs by `renderLine`.
+  **Letter spacing** and a manual **space width** go through `layoutLine`.
+  **Kerning**: `pixel-view.js` answers text_tool's `utbAutoKerning` seam with
+  whether the page's producer kerned the box's family, so a new box follows
+  the page; the Kerning checkbox then wins in both directions (the status
+  line says `your Kerning setting, not the page's`), with the face's kern
+  pairs from `/font-metrics` quantized and scaled under the page's law. A set
+  the page never certified (a bold italic nobody wrote) borrows the
+  *structure* of its family's law on that page — quantization, scale,
+  kerned-or-not — never its tables.
+- **Honest limits.** A character the face lacks, a style the family has no
+  file for (nothing is synthesized), a set that is not loaded, or a
   page raster that is not 1:1 with the viewBox → SVG fallback, never an
   approximation. The seam is `window.utbPixelRender` in `svg-renderer.js`
   (see [Unified Text Box](../../architecture/unified-text-box.md)).

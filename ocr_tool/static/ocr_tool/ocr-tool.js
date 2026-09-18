@@ -405,8 +405,15 @@ async function ocrLearnProducer(pageNum, res) {
     ocrProducer.set(ocrProducerKey(pageNum, name), m);
     learned++;
   }
-  // boxes laid by the law (edited or typed text) are drawn again with it
-  if (learned && window.PixelView?.state?.on) { window.PixelView.invalidate?.(); window.renderAllTextLayers?.(); }
+  // boxes laid by the law (edited or typed text) are drawn again with it —
+  // and a box whose kerning nobody chose takes the page's now (text_tool asks
+  // window.utbAutoKerning at render time), in SVG as well as in pixels
+  if (learned) {
+    if (window.PixelView?.state?.on) { window.PixelView.invalidate?.(); window.renderAllTextLayers?.(); }
+    else if (typeof renderBox === 'function')
+      for (const b of utbState.boxes) if (b.page === pageNum && b.kerningAuto) renderBox(b);
+    window.syncToolbarToSelection?.();
+  }
 }
 
 // ── Precomputed cache (startup document only) ─────────────────

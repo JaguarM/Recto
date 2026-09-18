@@ -73,18 +73,92 @@ function pvSetByName(name) {
   return ocrToolState.sets?.find(s => s.name === name) || null;
 }
 
-// The set(s) that draw a box: the reader's pick for OCR lines (a union-pool
-// line reports one font label but each glyph carries the set that drew it —
-// src, from the engine's L.glyphs), else the family/size match for
-// everything else. Returns {primary, byName, label} or null.
+// ── sets rasterized on demand ─────────────────────────────────
+// The bundle holds the faces, styles and sizes the corpus needed. A typed box
+// is set in whatever the toolbar says — Times bold italic, Arial 9.5 pt — so
+// when no bundled set is that face at that size the glyphs are rasterized
+// here, from the catalogue's own font file, by the engine's certified port of
+// mupdf's glyph pipeline (engine/ftraster.js — the code that generated the
+// bundle). Nothing is synthesized: a family with no bold italic file has none.
+const pvFaces = new Map();      // font url -> face | null (unreadable) | Promise
+const pvDynSets = new Map();    // `${url}|${sizePx}` -> set   (insertion order = LRU)
+const PV_DYN_MAX = 32;
+let pvRefreshTimer = null;
+function pvRefreshSoon() {       // something a box was waiting for has arrived
+  clearTimeout(pvRefreshTimer);
+  pvRefreshTimer = setTimeout(() => { if (pixelView.on) window.renderAllTextLayers?.(); }, 0);
+}
+// the face behind a font file: loaded once, null while loading (the caller
+// declines this render; the box is drawn again when it arrives)
+function pvFace(url) {
+  if (!url || typeof FTRaster === 'undefined') return null;
+  const have = pvFaces.get(url);
+  if (have !== undefined) return have instanceof Promise ? null : have;
+  pvFaces.set(url, (async () => {
+    let face = null;
+    try {
+      const r = await fetch(url);
+      if (r.ok) face = FTRaster.loadFace(await r.arrayBuffer());
+    } catch (e) { console.warn('pixel view: font', url, e); }
+    pvFaces.set(url, face);
+    pvRefreshSoon();
+    return face;
+  })());
+  return null;
+}
+function pvFaceUrl(family, bold, italic) {
+  return window.FontCatalog?.fileUrl?.(family, bold, italic) || null;
+}
+// {set} | {pending: true} | {why}
+function pvDynamicSet(box) {
+  const url = pvFaceUrl(box.fontFamily, !!box.bold, !!box.italic);
+  const styleName = `${box.fontFamily}${box.bold ? ' bold' : ''}${box.italic ? ' italic' : ''}`;
+  if (!url) return { why: `${styleName} is not an installed face (nothing is synthesized)` };
+  const sizePx = box.sizePt * GEO.docPxPerPt();
+  if (!(sizePx >= 2 && sizePx <= 400)) return { why: `${sizePx.toFixed(2)} px is outside the size a page is set in` };
+  const face = pvFace(url);
+  if (face === null) return pvFaces.get(url) === null ? { why: `${url.split('/').pop()} could not be read` } : { pending: true };
+  const key = `${url}|${sizePx}`;
+  let set = pvDynSets.get(key);
+  if (set) { pvDynSets.delete(key); pvDynSets.set(key, set); return { set }; }
+  set = FTRaster.makeSet(face, { name: `${url.split('/').pop()}@${+sizePx.toFixed(4)}`, sizePx });
+  set.family = box.fontFamily; set.bold = !!box.bold; set.italic = !!box.italic;
+  pvDynSets.set(key, set);
+  while (pvDynSets.size > PV_DYN_MAX) pvDynSets.delete(pvDynSets.keys().next().value);
+  return { set };
+}
+// family / style of any set: the bundle's through set-fonts.js, a dynamic
+// set's own
+function pvStyleOf(set) {
+  return set.dynamic ? { family: set.family, bold: set.bold, italic: set.italic, plain: true } : pvSetStyle(set.name);
+}
+// the face behind ANY set (decorations need its metrics): null while loading
+function pvFaceOfSet(set) {
+  if (set.dynamic) return set.face;
+  const st = pvSetStyle(set.name);
+  return st ? pvFace(pvFaceUrl(st.family, st.bold, st.italic)) : null;
+}
+
+// Is the box still in the face the reader read it in? The reader's sets (and
+// its measured pens) are that face's; once the user makes the line bold or
+// another size it is typed text like any other.
+function pvAsRead(box) {
+  return !!box.ocr?.font && !(typeof utbFaceChanged === 'function' && utbFaceChanged(box));
+}
+
+// The set(s) that draw a box: the reader's pick for OCR lines still in the
+// face they were read in (a union-pool line reports one font label but each
+// glyph carries the set that drew it — src, from the engine's L.glyphs), else
+// a bundled set of the box's family, style and size, else one rasterized on
+// demand. Returns {primary, byName, label} | {pending} | {why}.
 function pvSetsForBox(box) {
   const sets = ocrToolState.sets;
   if (!sets) return null;
-  if (box.ocr?.font) {
+  if (pvAsRead(box)) {
     const names = new Set(box.ocr.font.split('+'));
     for (const cp of box.baseCharPositions || []) if (cp.src) names.add(cp.src);
     const found = [...names].map(pvSetByName).filter(Boolean);
-    if (!found.length) return null;
+    if (!found.length) return { why: `set ${box.ocr.font} is not loaded` };
     const primary = pvSetByName(box.ocr.font.split('+')[0]) || found[0];
     return { primary, byName: new Map(found.map(s => [s.name, s])),
       label: found.length > 1 ? found.map(s => s.name).join('+') : found[0].name };
@@ -96,7 +170,10 @@ function pvSetsForBox(box) {
     return st && st.plain && st.family === want.family && st.bold === want.bold &&
       st.italic === want.italic && Math.abs(s.sizePx - sizePx) < 0.02;
   });
-  return hit ? { primary: hit, byName: new Map([[hit.name, hit]]), label: hit.name } : null;
+  if (hit) return { primary: hit, byName: new Map([[hit.name, hit]]), label: hit.name };
+  const dyn = pvDynamicSet(box);
+  if (!dyn.set) return dyn;
+  return { primary: dyn.set, byName: new Map([[dyn.set.name, dyn.set]]), label: dyn.set.name };
 }
 
 function pvSpaceAdv(box, set) {
@@ -105,7 +182,9 @@ function pvSpaceAdv(box, set) {
   // page-calibrated space
   for (const b of utbState.boxes)
     if (b.page === box.page && b.ocr?.spaceAdv && b.ocr.font === set.name) return b.ocr.spaceAdv;
-  const family = pvSetStyle(set.name)?.family || box.fontFamily;
+  const face = pvFaceOfSet(set);
+  if (face?.gidFor) { const g = face.gidFor(0x20); if (g) return face.advance(g) * set.sizePx / face.unitsPerEm; }
+  const family = pvStyleOf(set)?.family || box.fontFamily;
   return (PV_SPACE_EM[family] ?? 0.25) * set.sizePx;
 }
 
@@ -115,9 +194,66 @@ function pvSpaceAdv(box, set) {
 // certified gets the least assumption — the PDF's 1/1000-em advances at the
 // set's size, no kerning — and the status line says it is assumed.
 const PV_DEFAULT_LAW = { quant: 1000, scale: 1, kerned: false, kern: new Map(), adv: new Map(), assumed: true };
-function pvLaw(box, set) {
-  return window.ocrProducerFor?.(box.page, set.name) || PV_DEFAULT_LAW;
+// The page's law for a box's set — and when the page certified nothing in
+// that exact set (a bold italic nobody wrote, another size), the STRUCTURE of
+// the law its family was laid with there: the advance quantization, the laid
+// scale and whether the producer kerned are properties of the producer, the
+// tables are the face's.
+function pvPageLaw(box, set) {
+  const own = window.ocrProducerFor?.(box.page, set.name);
+  if (own) return own;
+  const st = pvStyleOf(set), family = st?.family || box.fontFamily;
+  const kin = (window.ocrProducerList?.(box.page) || []).filter(m => m.family === family);
+  if (!kin.length) return null;
+  const sameStyle = m => { const ms = pvSetStyle(m.set); return ms && st && ms.bold === st.bold && ms.italic === st.italic; };
+  kin.sort((a, b) => (sameStyle(b) ? 1 : 0) - (sameStyle(a) ? 1 : 0) || (b.words || 0) - (a.words || 0));
+  const L = kin[0];
+  return { quant: L.quant, scale: L.scale, kerned: L.kerned, tableKnown: L.tableKnown, kern: new Map(), adv: new Map(),
+    borrowed: L.set, words: null };
 }
+// the face's own kern pairs at the set's size under a law (quantized and
+// scaled like every advance): Map pair → px, empty while the table loads
+const pvKernTables = new Map();   // `${family}|b|i|sizePx` -> {pairs} | Promise
+const PV_NO_KERN = new Map();
+function pvKernMap(set, law) {
+  const st = pvStyleOf(set);
+  if (!st || !window.FontCatalog?.metrics) return PV_NO_KERN;
+  const key = `${st.family}|${st.bold ? 1 : 0}|${st.italic ? 1 : 0}|${set.sizePx}`;
+  let t = pvKernTables.get(key);
+  if (t === undefined) {
+    t = window.FontCatalog.metrics(st.family, st.bold, st.italic, set.sizePx)
+      .then(m => { pvKernTables.set(key, { pairs: m?.kern || {}, maps: new Map() }); pixelView.cache.clear(); pvRefreshSoon(); })
+      .catch(() => pvKernTables.set(key, { pairs: {}, maps: new Map() }));
+    pvKernTables.set(key, t);
+  }
+  if (t instanceof Promise) return PV_NO_KERN;
+  const lk = `${law.quant}|${law.scale}`;
+  let m = t.maps.get(lk);
+  if (!m) {
+    m = new Map();
+    for (const [pair, v] of Object.entries(t.pairs)) { const lv = OCRRender.lawAdv(v, set.sizePx, law); if (lv) m.set(pair, lv); }
+    t.maps.set(lk, m);
+  }
+  return m;
+}
+// The law a box is LAID with: the page's, with kerning as the box says — it
+// follows the page until the user chooses (UnifiedTextBox.kerningAuto), and
+// then the Kerning box wins in both directions.
+function pvLaw(box, set) {
+  const page = pvPageLaw(box, set) || PV_DEFAULT_LAW;
+  const kerned = !!box.kerning;
+  const kern = !kerned ? PV_NO_KERN : (page.kerned && page.kern?.size && !page.borrowed) ? page.kern : pvKernMap(set, page);
+  return { ...page, kerned, kern, userKerning: !box.kerningAuto && kerned !== !!page.kerned };
+}
+// text_tool's seam: whether the page's producer kerned this box's family —
+// boolean, or undefined while nothing is known (the box keeps what it has)
+window.utbAutoKerning = function (box) {
+  const laws = (window.ocrProducerList?.(box.page) || []).filter(m => m.family === box.fontFamily && m.tableKnown);
+  if (!laws.length) return undefined;
+  const st = { bold: !!box.bold, italic: !!box.italic };
+  const same = laws.find(m => { const ms = pvSetStyle(m.set); return ms && ms.bold === st.bold && ms.italic === st.italic; });
+  return !!(same || laws.sort((a, b) => (b.words || 0) - (a.words || 0))[0]).kerned;
+};
 // A box laid through the law (render.js layoutLine). A reader line is laid
 // the way lineLayout says it was: every word from its own solved sub-lattice
 // start (the producer's starts were floats the page shows snapped) and each
@@ -128,7 +264,7 @@ function pvLaw(box, set) {
 // new text draws with the primary set. Returns {glyphs:[{ch, pen, set}],
 // advanceW, missing}.
 function pvLayout(box, primary, byName, law) {
-  const ents = (box.ocr?.entries || []).filter(e => e.ch !== '□');
+  const ents = pvAsRead(box) ? (box.ocr?.entries || []).filter(e => e.ch !== '□') : [];
   // the set and law of every glyph the reader read (union lines), while the
   // text still lines up with the entries
   const text = [...box.text].filter(c => c !== ' ');
@@ -140,20 +276,26 @@ function pvLayout(box, primary, byName, law) {
     bySrc.set(e.src, { sizePx: st.sizePx, m });
     metricsBySet.set(st.name, m);
   }
+  // the toolbar's own spacing: a manual space width replaces every space of
+  // the line (the measured gaps included), letter spacing is em → px
+  const manualSpace = box.spaceWidth != null && !box.defaultSpaceWidth ? +box.spaceWidth : null;
+  const letterSpacing = (+box.letterSpacing || 0) * primary.sizePx;
   let start = box.x, spaceWidths = null;
   if (ents.length && typeof OCRRender.lineLayout === 'function') {
     const ll = OCRRender.lineLayout({ entries: ents }, primary.sizePx, law, box.ocr?.spaceAdv, bySrc);
     start = box.x + ll.delta;
-    spaceWidths = ll.spaceWidths;
+    spaceWidths = manualSpace == null ? ll.spaceWidths : null;
   }
-  const lay = OCRRender.layoutLine(primary, box.text, start, { spaceAdv: pvSpaceAdv(box, primary), spaceWidths, metrics: law,
-    glyphSets: same ? ents.map(e => setOf(e.src)) : null, metricsBySet });
+  const lay = OCRRender.layoutLine(primary, box.text, start, { spaceAdv: manualSpace ?? pvSpaceAdv(box, primary), spaceWidths, metrics: law,
+    letterSpacing, glyphSets: same ? ents.map(e => setOf(e.src)) : null, metricsBySet });
   const glyphs = lay.glyphs.map(g => ({ ch: g.ch, pen: g.pen, set: g.set || primary }));
-  return { glyphs, advanceW: lay.advanceW, missing: lay.missing };
+  return { glyphs, advanceW: lay.advanceW, missing: lay.missing, start };
 }
 const pvLawLabel = law => !law ? '' :
   `${law.quant ? `1/${law.quant} em` : 'hmtx'} × ${(+law.scale).toFixed(5)}` +
-  (law.kerned ? ', kerned' : law.tableKnown ? ', no kerning' : '') +
+  (law.kerned ? ', kerned' : law.tableKnown || law.userKerning ? ', no kerning' : '') +
+  (law.userKerning ? ' (your Kerning setting, not the page\'s)' : '') +
+  (law.borrowed ? ` (the page's law for ${law.borrowed})` : '') +
   (law.assumed ? ' (assumed — nothing certified in this set on the page)' : law.words != null ? ` (${law.exact}/${law.words} words written back)` : '');
 
 function pvTint(box) {
@@ -269,19 +411,30 @@ function utbPixelRender(box, xs, baseline) {
   if (!ocrToolState.sets) { pvEnsureSets(); return null; }
   if (!box.text || box.ocr?.unread || pvLayerHidden(box)) { pvForget(box.id); return null; }
   const setInfo = pvSetsForBox(box);
-  if (!setInfo) {
+  if (!setInfo?.primary) {
     pvForget(box.id);
-    pvNote(box, box.ocr?.font ? `set ${box.ocr.font} is not loaded`
-      : `no glyph set for ${box.fontFamily}${box.bold ? ' bold' : ''}${box.italic ? ' italic' : ''} ` +
-        `${Math.round(box.sizePt * 100) / 100} pt (${(box.sizePt * GEO.docPxPerPt()).toFixed(2)} px) — generate it in tol0 (fontgen) and sync`);
+    // a face still loading is not a failure: the box is drawn again when it arrives
+    if (setInfo?.why) pvNote(box, setInfo.why);
     return null;
   }
   const { primary, byName } = setInfo;
+  if (primary.dynamic) {
+    const lacks = primary.ensure(box.text);
+    if (lacks.length) {
+      pvForget(box.id);
+      pvNote(box, `${primary.name.split('@')[0]} has no glyph for "${lacks.join('')}"`);
+      return null;
+    }
+  }
 
-  // pens: the measured ones when the box has them, else a fresh layout
+  // pens: the measured ones while they are this face's and nothing the user
+  // set asks for another layout, else a fresh layout
+  const law = pvLaw(box, primary);
   const glyphs = [];
-  let advanceW = 0;
-  if (box.baseCharPositions?.length && xs.length === box.baseCharPositions.length) {
+  let advanceW = 0, runX0 = box.x, runX1 = box.x;
+  // (svg-renderer's xs are the measured positions only while utbCharsValid)
+  const measured = box.baseCharPositions?.length && xs.length === box.baseCharPositions.length;
+  if (measured) {
     for (let i = 0; i < xs.length; i++) {
       const cp = box.baseCharPositions[i];
       if (cp.ligTail) continue;
@@ -289,14 +442,15 @@ function utbPixelRender(box, xs, baseline) {
       if (ch === ' ' || ch === '□') continue;
       glyphs.push({ ch, pen: xs[i], set: (cp.src && byName.get(cp.src)) || primary });
     }
+    runX0 = xs[0];
+    runX1 = xs[xs.length - 1] + (box.baseCharPositions[xs.length - 1].w || 0);
   } else {
     // a fresh layout under the producer's law for this set on this page
     // (ocr-tool.js ocrLearnProducer), from the start the line was laid from
     // when the box is a reader line, with the line's own measured gaps for
     // its spaces: an unedited line comes back at its pens, an edit continues
     // under the same law, and a typed box is laid as this document's
-    // producer would have laid it
-    const law = pvLaw(box, primary);
+    // producer would have laid it — kerned or not as the box says
     const lay = pvLayout(box, primary, byName, law);
     if (lay.missing.length) {
       pvForget(box.id);
@@ -305,20 +459,38 @@ function utbPixelRender(box, xs, baseline) {
     }
     glyphs.push(...lay.glyphs);
     advanceW = lay.advanceW;
+    runX0 = lay.start; runX1 = lay.start + lay.advanceW;
   }
-  if (!glyphs.length) { pvForget(box.id); return null; }
+  if (!glyphs.length && !(box.underline || box.strikethrough)) { pvForget(box.id); return null; }
 
   const yb = OCRRender.snapY(baseline);
+  // underline / strikethrough: filled rectangles from the face's own metrics,
+  // under mupdf's path rasterizer (engine/ftraster.js rectCoverage)
+  const rects = [];
+  if ((box.underline || box.strikethrough) && runX1 > runX0 && typeof FTRaster !== 'undefined') {
+    const face = pvFaceOfSet(primary);
+    if (!face) {
+      // the face is on its way (drawn again when it arrives) — or the set has none
+      if (!pvSetStyle(primary.name) && !primary.dynamic) pvNote(box, `set ${primary.name} has no face to take an underline from`);
+    } else for (const kind of ['underline', 'strikethrough']) {
+      if (!box[kind]) continue;
+      const q = FTRaster.decoration(face, primary.sizePx, kind, runX0, runX1, yb);
+      const cov = q && FTRaster.rectCoverage(q.x0, q.y0, q.x1, q.y1);
+      if (cov) rects.push(cov);
+    }
+  }
+  if (!glyphs.length && !rects.length) { pvForget(box.id); return null; }
   const info = pvPageInfo(box.page);
   const tint = pvTint(box);
   // the reader's own terms for this line: which y-phase records it pinned
   // the line to, and the per-pixel tolerance of the rung it was read on
   const phy = box.ocr?.phy || 0, tol = box.ocr?.tol || 0;
   const key = [setInfo.label, box.text, glyphs.map(g => Math.round(g.pen * 4)).join(','), yb, phy, tol,
-    pixelView.diff ? 'd' : 'p', info ? 'pg' : 'nopg', tint.join('.'), box.ocr?.quant ? 'q' : ''].join('|');
+    pixelView.diff ? 'd' : 'p', info ? 'pg' : 'nopg', tint.join('.'), box.ocr?.quant ? 'q' : '',
+    rects.map(q => `${q.x0},${q.y0},${q.w},${q.h},${q.cov[0]},${q.cov[q.cov.length - 1]}`).join(';')].join('|');
   let out = pixelView.cache.get(key);
   if (!out) {
-    const r = OCRRender.renderLine(primary, glyphs, yb, { phy });
+    const r = OCRRender.renderLine(primary, glyphs, yb, { phy, rects });
     if (r.missing.length) {
       pvForget(box.id);
       pvNote(box, `no glyph for "${r.missing.join('')}" in ${setInfo.label}${phy ? ` at y-phase ${phy}` : ''}`);
@@ -390,7 +562,7 @@ function pvSettle() {
       // above it: ink up there is the previous line's) down to baseline +
       // maxDesc of the line's set(s), the scan window's bottom (a redaction
       // box's bottom AA row one pixel further down is not this line's ink)
-      const sets = [...(pvSetsForBox(box)?.byName.values() || [])];
+      const sets = [...(pvSetsForBox(box)?.byName?.values() || [])];
       const asc = Math.max(0, ...sets.map(s => s.maxAsc)), desc = Math.max(0, ...sets.map(s => s.maxDesc));
       const yb = box.ocr.baseline;
       // columns: this box, plus a reach past its end that stops at the next
@@ -501,7 +673,8 @@ function pvReportSelection() {
   const short = (box.text || '').length > 28 ? box.text.slice(0, 28) + '…' : box.text;
   const r = pixelView.results.get(id);
   if (!r) { setOcrStatus(`MuPDF pixels: "${short}" drawn as SVG (${pixelView.notes.get(id) || 'no glyph set'})`); return; }
-  const law = window.ocrProducerFor?.(box.page, r.set.split('+')[0]);
+  const si = pvSetsForBox(box);
+  const law = si?.primary ? pvLaw(box, si.primary) : null;
   setOcrStatus(`MuPDF pixels: "${short}" · ${r.set} · ${r.ink ?? '?'} ink px · ` +
     (r.count === null ? 'page raster not loaded'
       : r.count === 0 ? (r.tol ? `drawn glyphs match the page within ±${r.tol}` : 'drawn glyphs match the page exactly')
@@ -554,9 +727,10 @@ window.PixelView = {
     const box = utbState.getBox(id);
     if (!box || !ocrToolState.sets || typeof OCRRender === 'undefined') return null;
     const setInfo = pvSetsForBox(box);
-    if (!setInfo) return null;
+    if (!setInfo?.primary) return null;
     const { primary } = setInfo;
     const { byName } = setInfo;
+    if (primary.dynamic) primary.ensure(box.text);
     const law = pvLaw(box, primary);
     const lay = pvLayout(box, primary, byName, law);
     const ents = (box.ocr?.entries || []).filter(e => e.ch !== '□');
@@ -570,7 +744,8 @@ window.PixelView = {
       count = d.count; ink = d.ink;
     }
     return { id, page: box.page, text: box.text, set: primary.name, clean: box.ocr?.clean ?? null,
-      law: { quant: law.quant, scale: law.scale, kerned: law.kerned, assumed: !!law.assumed }, pens, penExact, count, ink, missing: lay.missing };
+      law: { quant: law.quant, scale: law.scale, kerned: law.kerned, assumed: !!law.assumed, borrowed: law.borrowed || null, userKerning: !!law.userKerning },
+      pens, penExact, count, ink, missing: lay.missing, dynamic: !!primary.dynamic };
   },
   report() {
     if (pixelView.dirty.size) pvSettle();

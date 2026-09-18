@@ -17,7 +17,8 @@
 | `#fabric-underline` | `box.underline` | Toggle button |
 | `#fabric-strikethrough` | `box.strikethrough` | Toggle button |
 | `#fabric-color` | `box.color` | Hex color; `null` = per-type default |
-| `#fabric-nudge-mode` | — | Toggle button; enters/exits micro-typography nudge mode on the selected span. Disabled when the span has no `baseCharPositions`. |
+| `#kerning` | `box.kerning` (+ clears `box.kerningAuto`) | Checkbox. `box.kerning` is always the effective boolean; until the user touches the box it **follows the page** (`kerningAuto`, see below) and the label's tooltip says so |
+| `#fabric-nudge-mode` | — | Toggle button; enters/exits micro-typography nudge mode on the selected span. Disabled unless the span's measured positions still apply (`utbCharsValid(box)`). |
 | `#fabric-letter-spacing` | `box.letterSpacing` | em units |
 | `#fabric-default-sw` | `box.defaultSpaceWidth` | Checkbox; when checked, uses the font's native space width. Uncheck for manual slider control. |
 | `#fabric-space-width` | `box.spaceWidth` | Slider; active only when `#fabric-default-sw` is unchecked |
@@ -48,7 +49,9 @@ Reads from the `UnifiedTextBox` and pushes values into the toolbar UI. Called wh
 fsInput.value = Math.round(box.sizePt * 100) / 100;  // points, shown directly
 ```
 
-Also sets font family, bold/italic/underline/strikethrough active states, letter spacing, color, Default Space Width checkbox, space-width slider, and nudge button state (active if micro-typo mode is active for this box, disabled if box lacks `baseCharPositions`).
+Also sets font family, bold/italic/underline/strikethrough active states, letter spacing, color, kerning, Default Space Width checkbox, space-width slider, and nudge button state (active if micro-typo mode is active for this box, disabled unless `utbCharsValid(box)`).
+
+The font menu is made to **show the box's family even when the catalogue lacks it** (an option marked "not installed" is added): every toolbar change writes the menu's value back into the box, so a menu left on another family would silently re-font the box the next time Bold is clicked.
 
 ---
 
@@ -58,8 +61,29 @@ Reads the current toolbar state and writes it directly to the box, then calls `r
 
 ```js
 const inputSize = parseFloat(el('fabric-font-size').value);   // points
-box.sizePt = !isNaN(inputSize) ? inputSize : box.sizePt;
+box.sizePt = inputSize > 0 ? inputSize : box.sizePt;          // never 0, negative or NaN
 ```
+
+Kerning is **not** read here — it has its own `change` handler, because
+reading the checkbox on every toolbar change would turn a box that follows the
+page into one with a fixed choice.
+
+### Settings and measured positions
+
+A box read from a PDF or by an analysis plugin carries `baseCharPositions`,
+measured under one typography (`box.baseFace`: family, style, size, letter
+spacing — snapshotted at construction). Those positions stop applying the
+moment the box is set in anything else — bold glyphs at regular pens overlap —
+or the user asks for a kerning the page did not have; `utbCharsValid(box)` is
+the single test, `computeXPositions` returns `[box.x]` when it fails, and every
+renderer then lays the text afresh. Going back to the measured typography
+brings the positions back.
+
+`box.kerningAuto` (true unless the creator passed `kerning` explicitly) lets an
+analysis plugin decide the default: before rendering, `svg-renderer.js` asks
+the guarded seam `window.utbAutoKerning?.(box)` and, on a boolean, writes it to
+`box.kerning` — so SVG `font-kerning`, `/widths` requests and any pixel renderer
+all read one effective value. The Kerning checkbox clears the flag for good.
 
 If `box.defaultSpaceWidth` is unchecked and the box has text, the manual `box.spaceWidth` from the slider is used.
 
@@ -147,7 +171,10 @@ Three consumers, one source:
   `window.FontCatalog` (`has`, `familyForPdfName`, `select(family, sizePt)`,
   `metrics(family, bold, italic, sizePx)` — the face's own advances and kern
   pairs at a pixel size from `/font-metrics`, cached; what a plugin that
-  measured a page's pens uses to lay pairs the page never wrote).
+  measured a page's pens uses to lay pairs the page never wrote — and
+  `fileUrl(family, bold, italic)`, the installed file of exactly that style or
+  `null`: what a renderer that rasterizes glyphs itself loads; nothing is
+  synthesized, a family without a bold italic has none).
   SVG text in `font-family: "Nimbus Roman"` is therefore drawn from the same
   file HarfBuzz measures with — the vector face matches the raster face.
 - **`/widths`** takes `family`, `bold`, `italic` and resolves the file through

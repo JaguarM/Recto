@@ -12,7 +12,7 @@
   // ── Enter / exit mode ─────────────────────────────────────────
 
   function enterMicroTypo(box) {
-    if (!box.baseCharPositions?.length) return; // nothing to adjust without char positions
+    if (!utbCharsValid(box)) return; // nothing to adjust without char positions of the box's current face
     if (utbState.editingId) return; // don't enter while inline-edit is active
 
     exitMicroTypo(); // clean up previous session

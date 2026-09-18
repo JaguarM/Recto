@@ -8,7 +8,7 @@
 //   2. the toolbar's font menu (#fabric-font-family), one option per family,
 //      MuPDF's own faces first;
 //   3. window.FontCatalog for everyone else: has(), familyForPdfName(),
-//      select(family, sizePt).
+//      select(family, sizePt), metrics(), fileUrl().
 //
 // Two generic events choose the default face, so no plugin is named here:
 //   document:loaded   — the core's declared PDF fonts (pdfFonts) and sampled
@@ -137,6 +137,16 @@
     return metricsCache.get(key);
   }
 
-  window.FontCatalog = { has, familyForPdfName, select, metrics,
+  // The installed file of one style of a family, as a URL — what a renderer
+  // that draws glyphs itself loads. null when that style is not installed (a
+  // family without a bold italic has none to draw; nothing is synthesized).
+  function fileUrl(family, bold, italic) {
+    const fam = catalog.byFamily.get(family);
+    if (!fam) return null;
+    const style = bold && italic ? 'bolditalic' : bold ? 'bold' : italic ? 'italic' : 'regular';
+    return fam.files?.[style] && fam.present?.[style] ? catalog.staticBase + fam.files[style] : null;
+  }
+
+  window.FontCatalog = { has, familyForPdfName, select, metrics, fileUrl,
     families: () => catalog.families, get ready() { return catalog.ready; }, get default() { return catalog.default; } };
 })();

@@ -5,6 +5,40 @@
 let _utbIdCounter = 0;
 function nextUtbId() { return `utb-${++_utbIdCounter}`; }
 
+// The typography glyph positions depend on: family, style, size and letter
+// spacing — what a box's measured positions were measured under.
+function utbFaceOf(box) {
+  return { fontFamily: box.fontFamily, bold: !!box.bold, italic: !!box.italic, sizePt: +box.sizePt,
+    letterSpacing: +box.letterSpacing || 0 };
+}
+// Are the box's measured per-character positions still the positions of the
+// face it is set in? Bold glyphs at regular pens overlap; a larger size at the
+// old pens collides. When this is false every renderer lays the text afresh
+// from box.x.
+function utbFaceChanged(box) {
+  const f = box.baseFace;
+  if (!f) return false;
+  return !(f.fontFamily === box.fontFamily && f.bold === !!box.bold && f.italic === !!box.italic &&
+    Math.abs(f.sizePt - box.sizePt) < 0.005 && Math.abs((f.letterSpacing || 0) - (+box.letterSpacing || 0)) < 1e-9);
+}
+// Did the user choose a kerning that is not the page's? Measured positions
+// embody the page's kerning (or its absence); a box that must show the other
+// one is laid afresh. The page's kerning comes from the same guarded seam the
+// renderer asks (window.utbAutoKerning); unknown counts as "not kerned".
+function utbUserKerning(box) {
+  if (box.kerningAuto) return false;
+  let page = false;
+  try { const k = window.utbAutoKerning?.(box); if (typeof k === 'boolean') page = k; } catch { /* plugin's problem */ }
+  return !!box.kerning !== page;
+}
+function utbCharsValid(box) {
+  return !!box.baseCharPositions?.length && !utbFaceChanged(box) && !utbUserKerning(box);
+}
+window.utbFaceOf = utbFaceOf;
+window.utbFaceChanged = utbFaceChanged;
+window.utbUserKerning = utbUserKerning;
+window.utbCharsValid = utbCharsValid;
+
 class UnifiedTextBox {
   constructor(data) {
     this.id = data.id || nextUtbId();
@@ -32,14 +66,25 @@ class UnifiedTextBox {
     this.letterSpacing = data.letterSpacing || 0;
     this.color = data.color || null;  // null = per-type default
 
-    // Word spacing
-    this.kerning = data.kerning || false;
+    // Kerning. `kerning` is always the EFFECTIVE boolean every reader uses
+    // (SVG fontKerning, width requests, a pixel renderer). `kerningAuto` says
+    // nobody chose it yet: an analysis plugin that knows how the page's
+    // producer laid its text may then set it (window.utbAutoKerning, see
+    // svg-renderer.js); the toolbar's Kerning box clears the flag for good.
+    // A caller that passes `kerning` explicitly has chosen.
+    this.kerning = !!data.kerning;
+    this.kerningAuto = data.kerningAuto ?? (data.kerning === undefined || data.kerning === null);
     this.defaultSpaceWidth = data.defaultSpaceWidth ?? true; // true = use native font spacing
     this.spaceWidth = data.spaceWidth || null;               // manual override (used when defaultSpaceWidth is false)
     this.nativeSpaceWidth = data.nativeSpaceWidth || null;   // cached HarfBuzz natural space advance
 
     // Per-character positioning: [{c, x, w}] offsets relative to box.x
     this.baseCharPositions = data.baseCharPositions || null;
+    // …which were measured under ONE typography. They stop applying the
+    // moment the box's family, style, size or letter spacing no longer is that
+    // one, or the user asks for a kerning the page did not have
+    // (utbCharsValid), and apply again if the user goes back.
+    this.baseFace = data.baseFace || utbFaceOf(this);
 
     // Micro-typography: index → delta px (overrides applied on top of baseCharPositions)
     this.charAdvances = data.charAdvances || {};

@@ -355,7 +355,7 @@
   const api = { loadSets, readPage, readPageAuto, blindPasses, passLabel, boxBetween: Engine.boxBetween,
     detectObjects: Engine.detectObjects, findBands: Engine.findBands,
     scanLine: Engine.scanLine, whitenColored, quantMap: Engine.quantMap, snapConverted: Engine.snapConverted,
-    unionSets: Engine.unionSets };
+    unionSets: Engine.unionSets, parseBundleDir, materializeSet };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.BlindOCR = api;
 })(typeof self !== 'undefined' ? self : this);

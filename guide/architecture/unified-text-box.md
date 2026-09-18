@@ -49,7 +49,9 @@ renderBox(box)            ← called by renderTextLayer() / renderAllTextLayers(
     │
     └─ computeXPositions(box)        absolute x array for SVG <text x="…">
            │
-           ├─ box.baseCharPositions  per-char offsets from PDF extraction / HarfBuzz
+           ├─ box.baseCharPositions  per-char offsets from PDF extraction / HarfBuzz — only while
+           │                         utbCharsValid(box): the box is still in the typography they were
+           │                         measured under (box.baseFace) and no kerning the page lacked was asked for
            ├─ box.charAdvances[i]    accumulated per-char nudge deltas (micro-typo)
            └─ box.spaceWidth         manual word-spacing override (when defaultSpaceWidth=false)
     │
@@ -63,6 +65,8 @@ SVG <text> element in .text-layer[data-page="N"]
 ```
 
 The SVG layer uses a fixed `viewBox` matching document pixel space (816 × 1056). Zoom is handled entirely by CSS sizing on the layer element — coordinate values in `box.x/y/w/h` never change.
+
+**Kerning seam.** Before rendering, a box whose kerning nobody chose (`box.kerningAuto`) asks `window.utbAutoKerning?.(box)` — `typeof`-guarded like every plugin seam — and takes a boolean answer as `box.kerning`. An analysis plugin that knows whether the page's producer kerned answers; without one the box keeps `false`.
 
 **Pixel-renderer seam.** A plugin may define `window.utbPixelRender(box, xs, baseline)` to draw a box as a raster in image-pixel space instead of vector text (`xs` = the absolute per-character x positions the SVG would use, or `[box.x]`; `baseline` = `computeBaseline(box)`). `svg-renderer.js` calls it `typeof`-guarded for every box; the result rides on the transient `box._pixel` so `_autoFitWidth` can size auto-width boxes from its `advanceW`. Double-click on the image opens inline edit like on the text. With no plugin defining the seam the pipeline is unchanged.
 

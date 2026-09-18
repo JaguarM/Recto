@@ -97,6 +97,9 @@
     // opts.metricsBySet the law learned for each set; a glyph without one
     // takes `set` and `metrics`
     const glyphSets = opts?.glyphSets ?? null, bySet = opts?.metricsBySet ?? null;
+    // opts.letterSpacing: px added after every character, spaces included —
+    // the PDF's Tc and CSS letter-spacing both work that way
+    const ls = +opts?.letterSpacing || 0;
     const glyphs = [], missing = [];
     let x = x0, prev = null, prevSet = null, si = 0, gi = 0;
     for (const ch of text) {
@@ -104,7 +107,7 @@
         const w = spaceWidths?.[si] ?? spaceAdv;
         si++;
         if (w == null) { if (!missing.includes(' ')) missing.push(' '); continue; }
-        x += w; prev = null;
+        x += w + ls; prev = null;
         continue;
       }
       const gs = glyphSets?.[gi] || set;
@@ -118,9 +121,9 @@
       }
       if (gm?.kern && prev !== null && prevSet === gs) { const k = gm.kern.get(prev + ch); if (k) x += k; }
       glyphs.push({ ch, pen: snapX(x), penRaw: x, adv, set: gs });
-      x += adv; prev = ch; prevSet = gs;
+      x += adv + ls; prev = ch; prevSet = gs;
     }
-    return { glyphs, advanceW: x - x0, missing };
+    return { glyphs, advanceW: x - x0 - (ls && (glyphs.length || si) ? ls : 0), missing };
   }
 
   // The metrics a page's pens imply. For every pair of consecutive glyphs
@@ -365,6 +368,10 @@
   // the reader's fresh-canvas fast path, so a lone glyph reproduces its
   // bundle bytes for EVERY set kind (standard, linear, gray-ink srcover);
   // only composite pixels go through the law.
+  // opts.rects: [{x0, y0, w, h, cov}] — filled rectangles already turned into
+  // coverage (ftraster.js rectCoverage: mupdf's PATH rasterizer, a different
+  // antialiaser from the glyph pipeline), blended after the glyphs under the
+  // same law. An underline is a `re f` in the PDF, drawn by the same device.
   function renderLine(set, glyphs, baseline, opts) {
     const phy = opts?.phy ?? 0;
     const idx = glyphIndex(set, phy);
@@ -380,9 +387,16 @@
       if (!rec) { if (!missing.includes(g.ch)) missing.push(g.ch); continue; }
       placed.push({ rec, gx: pi + rec.dx, gy: yb + rec.dy, pen, lin: rec.lin ?? !!gs.linear });
     }
-    if (!placed.length)
+    const rects = (opts?.rects || []).filter(q => q && q.w > 0 && q.h > 0);
+    if (!placed.length && !rects.length)
       return { x0: 0, y0: 0, w: 0, h: 0, gray: new Uint8Array(0), hits: new Uint8Array(0), missing, baseline: yb, glyphs: 0 };
     let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    for (const q of rects) {
+      if (q.x0 < x0) x0 = q.x0;
+      if (q.y0 < y0) y0 = q.y0;
+      if (q.x0 + q.w > x1) x1 = q.x0 + q.w;
+      if (q.y0 + q.h > y1) y1 = q.y0 + q.h;
+    }
     for (const p of placed) {
       if (p.gx < x0) x0 = p.gx;
       if (p.gy < y0) y0 = p.gy;
@@ -414,6 +428,14 @@
         if (sh) shifts[i] += sh;
       }
     }
+    for (const q of rects)
+      for (let yy = 0; yy < q.h; yy++) for (let xx = 0; xx < q.w; xx++) {
+        const a = q.cov[yy * q.w + xx];
+        if (!a) continue;
+        const i = (q.y0 - y0 + yy) * w + (q.x0 - x0 + xx);
+        if (hits[i] < 255) hits[i]++;
+        gray[i] = (gray[i] * (256 - (a + (a >> 7)))) >> 8;
+      }
     return { x0, y0, w, h, gray, hits, missing, baseline: yb, glyphs: placed.length };
   }
 
